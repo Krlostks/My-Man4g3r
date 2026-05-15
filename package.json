@@ -1,0 +1,497 @@
+{
+  "name": "mm43",
+  "publisher": "KrlosTKS",
+  "displayName": "My M4nag3r",
+  "description": "E ",
+  "version": "0.1.0",
+  "engines": {
+    "vscode": "^1.107.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "*"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "mm43.vc.startFeature",
+        "title": "Nueva Feature",
+        "category": "MM43 · Control de Versión",
+        "icon": "$(add)"
+      },
+      {
+        "command": "mm43.vc.commitWithVector",
+        "title": "Commit con Vector de Versión",
+        "category": "MM43 · Control de Versión",
+        "icon": "$(git-commit)"
+      },
+      {
+        "command": "mm43.vc.flattenActive",
+        "title": "Aplanar Feature Activa",
+        "category": "MM43 · Control de Versión",
+        "icon": "$(git-merge)"
+      },
+      {
+        "command": "mm43.vc.flattenFeature",
+        "title": "Aplanar Feature...",
+        "category": "MM43 · Control de Versión",
+        "icon": "$(git-merge)"
+      },
+      {
+        "command": "mm43.vc.refresh",
+        "title": "Actualizar Control de Versión",
+        "category": "MM43 · Control de Versión",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "mm43.vc.showTopology",
+        "title": "Ver Topología DAG",
+        "category": "MM43 · Control de Versión",
+        "icon": "$(type-hierarchy)"
+      },
+      {
+        "command": "mm43.compilarJava",
+        "title": "MM43: Compilar Java",
+        "icon": "$(debug-step-over)"
+      },
+      {
+        "command": "mm43.hotReload",
+        "title": "MM43: Hot Reload",
+        "icon": "$(debug-rerun)"
+      },
+      {
+        "command": "mm43.generateClasspath",
+        "title": "MM43: Generar Classpath",
+        "icon": "$(library)"
+      },
+      {
+        "command": "mm43.addProject",
+        "title": "MM43: Agregar Proyecto Maven",
+        "icon": "$(add)"
+      },
+      {
+        "command": "mm43.buildProject",
+        "title": "MM43: Build",
+        "icon": "$(play)"
+      },
+      {
+        "command": "mm43.syncProject",
+        "title": "MM43: Sync → Payara",
+        "icon": "$(sync)"
+      },
+      {
+        "command": "mm43.installProject",
+        "title": "MM43: Instalar",
+        "icon": "$(sync)"
+      },
+      {
+        "command": "mm43.exportWar",
+        "title": "MM43: Exportar WAR",
+        "icon": "$(export)"
+      },
+      {
+        "command": "mm43.removeProject",
+        "title": "MM43: Eliminar Proyecto",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "mm43.refreshProjects",
+        "title": "MM43: Refrescar Proyectos",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "mm43.startWatcher",
+        "title": "MM43: Iniciar Watcher Java",
+        "icon": "$(eye)"
+      },
+      {
+        "command": "mm43.stopWatcher",
+        "title": "MM43: Detener Watcher Java",
+        "icon": "$(eye-closed)"
+      },
+      {
+        "command": "mm43.startServer",
+        "title": "MM43: Iniciar Servidor",
+        "icon": "$(play)"
+      },
+      {
+        "command": "mm43.stopServer",
+        "title": "MM43: Detener Servidor",
+        "icon": "$(debug-stop)"
+      },
+      {
+        "command": "mm43.restartServer",
+        "title": "MM43: Redeploy Completo",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "mm43.showServerLogs",
+        "title": "MM43: Ver Logs del Servidor",
+        "icon": "$(output)"
+      },
+      {
+        "command": "mm43.clearServerCache",
+        "title": "MM43: Limpiar Caches del Servidor",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "mm43.clearServerLogs",
+        "title": "MM43: Limpiar server.log",
+        "icon": "$(close)"
+      },
+      {
+        "command": "mm43.undeployApp",
+        "title": "MM43: Undeploy Aplicación",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "mm43.refreshDeployedApps",
+        "title": "MM43: Refrescar Apps Desplegadas",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "mm43.detectarBajoCursor",
+        "title": "MM43: Detectar palabra bajo cursor",
+        "icon": "$(selection)"
+      },
+      {
+        "command": "mm43.addServer",
+        "title": "MM43: Configurar Servidor",
+        "icon": "$(edit)"
+      },
+      {
+        "command": "mm43.removeServer",
+        "title": "MM43: Eliminar Servidor",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "mm43.deployExploded",
+        "title": "MM43: Agregar Proyecto al Servidor",
+        "icon": "$(add)"
+      },
+      {
+        "command": "mm43.importAgent",
+        "title": "MM43: Importar Agente Hot-Reload",
+        "icon": "$(cloud-download)"
+      },
+      {
+        "command": "mm43.removeAgent",
+        "title": "MM43: Eliminar Agente Hot-Reload",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "mm43.injectAgentOptions",
+        "title": "MM43: Inyectar Agente en Servidor (asadmin)",
+        "icon": "$(zap)"
+      },
+      {
+        "command": "mm43.openDomainXml",
+        "title": "MM43: Abrir domain.xml",
+        "icon": "$(code)"
+      },
+      {
+        "command": "mm43.db.refresh",
+        "title": "MM43: Refrescar Bases de Datos",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "mm43.db.provisionMissing",
+        "title": "MM43: Aprovisionar Recursos Faltantes",
+        "icon": "$(add)"
+      },
+      {
+        "command": "mm43.db.pingPool",
+        "title": "MM43: Ping Connection Pool",
+        "icon": "$(pulse)"
+      },
+      {
+        "command": "mm43.db.editPool",
+        "title": "MM43: Editar Pool",
+        "icon": "$(edit)"
+      },
+      {
+        "command": "mm43.db.deletePool",
+        "title": "MM43: Eliminar Pool",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "mm43.db.editResource",
+        "title": "MM43: Editar Recurso JDBC",
+        "icon": "$(edit)"
+      },
+      {
+        "command": "mm43.db.deleteResource",
+        "title": "MM43: Eliminar Recurso JDBC",
+        "icon": "$(trash)"
+      }
+    ],
+    "configuration": {
+      "title": "MM43 Manager",
+      "properties": {
+        "mm43.jdkPath": {
+          "type": "string",
+          "default": "C:\\Java\\jdk1.8.0_181\\bin\\javac.exe",
+          "description": "Ruta absoluta al ejecutable javac (JDK).",
+          "order": 1
+        },
+        "mm43.serverPath": {
+          "type": "string",
+          "default": "",
+          "description": "Directorio raíz de instalación del servidor (GlassFish/Payara).",
+          "order": 2
+        },
+        "mm43.serverType": {
+          "type": "string",
+          "default": "glassfish",
+          "description": "Tipo de servidor de aplicaciones.",
+          "enum": [
+            "glassfish",
+            "payara"
+          ],
+          "order": 3
+        },
+        "mm43.serverDomain": {
+          "type": "string",
+          "default": "",
+          "description": "Nombre del dominio del servidor a administrar.",
+          "order": 4
+        },
+        "mm43.hotReloadPort": {
+          "type": "number",
+          "default": 9999,
+          "description": "Puerto TCP del agente de Hot-Reload Java.",
+          "order": 5
+        },
+        "mm43.agentPath": {
+          "type": "string",
+          "default": "",
+          "description": "Ruta absoluta al archivo JAR del agente de Hot-Reload.",
+          "order": 6
+        },
+        "mm43.agentMode": {
+          "type": "string",
+          "default": "none",
+          "description": "Modo del agente: none (sin agente), basic (HotSwap básico), dcevm (recarga estructural completa).",
+          "enum": [
+            "none",
+            "basic",
+            "dcevm"
+          ],
+          "order": 7
+        },
+        "mm43.projects": {
+          "type": "array",
+          "default": [],
+          "description": "Lista de proyectos Maven gestionados por MM43.",
+          "order": 5,
+          "items": {
+            "type": "object",
+            "required": [
+              "name",
+              "rootPath",
+              "warName"
+            ],
+            "properties": {
+              "name": {
+                "type": "string",
+                "description": "Identificador corto del proyecto (ej. 'Admin')"
+              },
+              "rootPath": {
+                "type": "string",
+                "description": "Ruta absoluta a la raíz del proyecto Maven"
+              },
+              "warName": {
+                "type": "string",
+                "description": "Nombre del artefacto (ej: mi-app) que se genera en target/"
+              }
+            }
+          }
+        }
+      }
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "mm43-sidebar",
+          "title": "MM43 Manager",
+          "icon": "$(server-environment)"
+        }
+      ]
+    },
+    "views": {
+      "mm43-sidebar": [
+        {
+          "id": "mm43.projectsView",
+          "name": "Proyectos Maven",
+          "icon": "$(package)"
+        },
+        {
+          "id": "mm43.serverView",
+          "name": "Servidor Payara",
+          "icon": "$(server)"
+        },
+        {
+          "id": "mm43.logsView",
+          "name": "Logs",
+          "type": "webview",
+          "icon": "$(output)"
+        },
+        {
+          "id": "mm43.databaseView",
+          "name": "Bases de Datos",
+          "icon": "$(databases)"
+        },
+        {
+          "id": "mm43VersionControl",
+          "name": "Control de Versión",
+          "icon": "$(git-branch)"
+        }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "mm43.addProject",
+          "when": "view == mm43.projectsView",
+          "group": "navigation"
+        },
+        {
+          "command": "mm43.refreshProjects",
+          "when": "view == mm43.projectsView",
+          "group": "navigation"
+        },
+        {
+          "command": "mm43.vc.startFeature",
+          "when": "view == mm43VersionControl",
+          "group": "navigation@1"
+        },
+        {
+          "command": "mm43.vc.refresh",
+          "when": "view == mm43VersionControl",
+          "group": "navigation@2"
+        },
+        {
+          "command": "mm43.vc.showTopology",
+          "when": "view == mm43VersionControl",
+          "group": "navigation@3"
+        },
+        {
+          "command": "mm43.db.provisionMissing",
+          "when": "view == mm43.databaseView",
+          "group": "navigation@1"
+        },
+        {
+          "command": "mm43.db.refresh",
+          "when": "view == mm43.databaseView",
+          "group": "navigation@2"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "mm43.buildProject",
+          "when": "viewItem == mm43Project",
+          "group": "inline"
+        },
+        {
+          "command": "mm43.syncProject",
+          "when": "viewItem == mm43Project",
+          "group": "inline"
+        },
+        {
+          "command": "mm43.removeProject",
+          "when": "viewItem == mm43Project",
+          "group": "2_delete"
+        },
+        {
+          "command": "mm43.hotReload",
+          "when": "viewItem == mm43Project",
+          "group": "inline"
+        },
+        {
+          "command": "mm43.generateClasspath",
+          "when": "viewItem == mm43Project",
+          "group": "inline"
+        },
+        {
+          "command": "mm43.undeployApp",
+          "when": "viewItem == mm43DeployedApp",
+          "group": "inline"
+        },
+        {
+          "command": "mm43.refreshDeployedApps",
+          "when": "viewItem == mm43DeployedAppsParent",
+          "group": "inline"
+        },
+        {
+          "command": "mm43.db.pingPool",
+          "when": "viewItem == mm43DbPool",
+          "group": "inline"
+        },
+        {
+          "command": "mm43.db.editPool",
+          "when": "viewItem == mm43DbPool",
+          "group": "inline"
+        },
+        {
+          "command": "mm43.db.deletePool",
+          "when": "viewItem == mm43DbPool",
+          "group": "2_delete"
+        },
+        {
+          "command": "mm43.db.editResource",
+          "when": "viewItem == mm43DbResource",
+          "group": "inline"
+        },
+        {
+          "command": "mm43.db.deleteResource",
+          "when": "viewItem == mm43DbResource",
+          "group": "2_delete"
+        },
+        {
+          "command": "mm43.db.provisionMissing",
+          "when": "viewItem == mm43DbResourceMissing",
+          "group": "inline"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "mm43.detectarBajoCursor",
+          "group": "navigation",
+          "when": "editorTextFocus"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run package",
+    "compile": "npm run check-types && npm run lint && node esbuild.js",
+    "watch": "npm-run-all -p watch:*",
+    "watch:esbuild": "node esbuild.js --watch",
+    "watch:tsc": "tsc --noEmit --watch --project tsconfig.json",
+    "package": "npm run check-types && npm run lint && node esbuild.js --production",
+    "compile-tests": "tsc -p . --outDir out",
+    "watch-tests": "tsc -p . -w --outDir out",
+    "pretest": "npm run compile-tests && npm run compile && npm run lint",
+    "check-types": "tsc --noEmit",
+    "lint": "eslint src",
+    "test": "vscode-test"
+  },
+  "devDependencies": {
+    "@types/mocha": "^10.0.10",
+    "@types/node": "22.x",
+    "@types/vscode": "^1.107.0",
+    "@vscode/test-cli": "^0.0.11",
+    "@vscode/test-electron": "^2.5.2",
+    "esbuild": "^0.27.3",
+    "eslint": "^9.39.3",
+    "npm-run-all": "^4.1.5",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.56.1"
+  },
+  "dependencies": {
+    "fast-xml-parser": "^5.7.2"
+  }
+}
