@@ -7,29 +7,27 @@ import { AgenteHotReloadManager } from '../hotreload/AgenteHotReloadManager';
 import { Logger } from '../logger/Logger';
 
 export class AssetWatcher {
-    private isPaused: boolean = false;
     private saveListener?: vscode.Disposable;
 
-    constructor() {
-        // En el nuevo modelo, la instancia no hace nada hasta que se llame a startAll()
+    constructor(private isServerRunning?: () => boolean) {
+        // Registrar el listener de guardado global desde el inicio
+        this.initSaveListener();
     }
 
     setPaused(paused: boolean): void {
-        this.isPaused = paused;
-        if (paused) {
-            Logger.info('WATCHER', '⏸ Sincronización al guardar pausada.');
-        } else {
-            Logger.info('WATCHER', '▶ Sincronización al guardar reanudada.');
-        }
+        // No-op para mantener compatibilidad, el comportamiento real se rige por el estado del servidor
     }
 
-    startAll(): boolean {
+    private initSaveListener(): void {
         if (this.saveListener) {
-            return true;
+            return;
         }
 
         this.saveListener = vscode.workspace.onDidSaveTextDocument((document: vscode.TextDocument) => {
-            if (this.isPaused) { return; }
+            // SOLO funciona si el servidor está en ejecución (running)
+            if (this.isServerRunning && !this.isServerRunning()) {
+                return;
+            }
 
             const filename = document.fileName;
             
@@ -59,29 +57,28 @@ export class AssetWatcher {
             }
         });
 
-        Logger.info('WATCHER', '▶ Watcher global activado: reaccionará a Ctrl+S en archivos del proyecto.');
+        Logger.info('WATCHER', '▶ Listener global de Ctrl+S activo y pendiente del servidor.');
+    }
+
+    startAll(): boolean {
+        // No-op: Siempre está activo si el servidor está running
+        this.initSaveListener();
         return true;
     }
 
     startForProject(project: ProjectConfig): void {
-        // Por compatibilidad con comandos antiguos
-        this.startAll();
+        // No-op por compatibilidad
     }
 
     stopForProject(projectName: string): void {
-        // No-op en este nuevo paradigma
+        // No-op por compatibilidad
     }
 
     stopAll(): void {
-        if (this.saveListener) {
-            this.saveListener.dispose();
-            this.saveListener = undefined;
-            Logger.info('WATCHER', 'Watcher global de guardado (Ctrl+S) detenido.');
-        }
+        // No-op: No detenemos el listener físico para que siga reaccionando al Ctrl+S independientemente de la UI
     }
 
     get activeProjects(): string[] {
-        // En el nuevo modelo, todos los proyectos configurados están "activos"
         return ConfigManager.getProjects().map(p => p.name);
     }
 
@@ -118,6 +115,9 @@ export class AssetWatcher {
     }
 
     dispose(): void {
-        this.stopAll();
+        if (this.saveListener) {
+            this.saveListener.dispose();
+            this.saveListener = undefined;
+        }
     }
 }

@@ -60,7 +60,7 @@ export async function activate(context: vscode.ExtensionContext) {
     const serverManager = globalServerManager;
 
     const logTailer = new LogTailer();
-    const assetWatcher = new AssetWatcher();
+    const assetWatcher = new AssetWatcher(() => serverManager.getServerState() === 'running');
     serverManager.setAssetWatcher(assetWatcher);
     const cacheCleaner = new CacheCleaner();
     const mavenManager = new MavenManager();
@@ -271,6 +271,22 @@ export async function activate(context: vscode.ExtensionContext) {
             serverProvider.setWatcherState('stopped');
             assetWatcher.stopAll();
             vscode.window.showInformationMessage('[MM43] Watcher detenido.');
+        }),
+
+        vscode.commands.registerCommand('mm43.checkServerStatus', async () => {
+            Logger.debug('DEBUG', 'Comando mm43.checkServerStatus ejecutado');
+            await vscode.window.withProgress({
+                location: vscode.ProgressLocation.Notification,
+                title: "[MM43] Consultando estado del servidor...",
+                cancellable: false
+            }, async () => {
+                const status = await serverManager.checkServerStatus();
+                const statusStr = status === 'running' ? 'ACTIVO 🟢' : 'DETENIDO 🔴';
+                vscode.window.showInformationMessage(`[MM43] El servidor está: ${statusStr}`);
+                if (status === 'running') {
+                    await serverProvider.refreshDeployedApps();
+                }
+            });
         })
     );
 

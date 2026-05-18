@@ -160,6 +160,9 @@ export class ServerProvider implements vscode.TreeDataProvider<vscode.TreeItem> 
             deployedParent,
             new vscode.TreeItem('─────────────────', vscode.TreeItemCollapsibleState.None),
             // Acciones del servidor
+            new ServerActionItem('Consultar Estado del Servidor', {
+                command: 'mm43.checkServerStatus', title: 'Consultar Estado'
+            }, 'pulse'),
             new ServerActionItem('Iniciar Servidor', {
                 command: 'mm43.startServer', title: 'Iniciar Servidor'
             }, 'play'),

@@ -291,4 +291,40 @@ export class ServerManager {
             });
         });
     }
+
+    /**
+     * Consulta el estado real del servidor ejecutando 'asadmin list-domains'.
+     */
+    async checkServerStatus(): Promise<ServerState> {
+        return new Promise((resolve) => {
+            Logger.info('SERVER', 'Consultando estado real del servidor...');
+            const targetDomain = this.domain;
+            exec(`"${this.asadmin}" list-domains`, { timeout: 10_000 }, (error, stdout) => {
+                if (error) {
+                    Logger.error('SERVER', `Error al consultar dominios: ${error.message}`);
+                    this.onStateChange('stopped');
+                    resolve('stopped');
+                    return;
+                }
+
+                const lines = stdout.split('\n');
+                let foundState: ServerState = 'stopped';
+                for (const line of lines) {
+                    const cleanLine = line.trim();
+                    if (cleanLine.startsWith(targetDomain)) {
+                        if (cleanLine.includes('running') && !cleanLine.includes('not running')) {
+                            foundState = 'running';
+                        } else {
+                            foundState = 'stopped';
+                        }
+                        break;
+                    }
+                }
+
+                Logger.info('SERVER', `Estado detectado para '${targetDomain}': ${foundState.toUpperCase()}`);
+                this.onStateChange(foundState);
+                resolve(foundState);
+            });
+        });
+    }
 }
