@@ -54,7 +54,7 @@
       },
       {
         "command": "mm43.compilarJava",
-        "title": "MM43: Compilar Java",
+        "title": "MM43: Compilar y Recargar Clase Java",
         "icon": "$(debug-step-over)"
       },
       {
@@ -74,18 +74,23 @@
       },
       {
         "command": "mm43.buildProject",
-        "title": "MM43: Build",
+        "title": "MM43: Build Exploded",
+        "icon": "$(tools)"
+      },
+      {
+        "command": "mm43.runProject",
+        "title": "MM43: Run (Build + Deploy)",
         "icon": "$(play)"
       },
       {
-        "command": "mm43.syncProject",
-        "title": "MM43: Sync → Payara",
-        "icon": "$(sync)"
+        "command": "mm43.installProject",
+        "title": "MM43: Clean Install",
+        "icon": "$(package)"
       },
       {
-        "command": "mm43.installProject",
-        "title": "MM43: Instalar",
-        "icon": "$(sync)"
+        "command": "mm43.updateDependencies",
+        "title": "MM43: Actualizar Dependencias (-U)",
+        "icon": "$(cloud-download)"
       },
       {
         "command": "mm43.exportWar",
@@ -391,12 +396,12 @@
       ],
       "view/item/context": [
         {
-          "command": "mm43.buildProject",
+          "command": "mm43.runProject",
           "when": "viewItem == mm43Project",
           "group": "inline"
         },
         {
-          "command": "mm43.syncProject",
+          "command": "mm43.buildProject",
           "when": "viewItem == mm43Project",
           "group": "inline"
         },

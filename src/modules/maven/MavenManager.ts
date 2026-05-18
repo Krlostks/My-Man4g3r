@@ -7,171 +7,175 @@ import { Logger } from '../logger/Logger';
 
 export class MavenManager {
 
+    // ─────────────────────────────────────────────
+    // BLOQUE 1: Ciclo de vida principal
+    // ─────────────────────────────────────────────
+
+    /**
+     * Compila + genera carpeta exploded en target/<warName>.
+     * Uso: flujo Run (paso previo a deploy/redeploy).
+     */
+    async buildExploded(project: ProjectConfig, skipTests = true): Promise<boolean> {
+        Logger.debug('DEBUG', `buildExploded: ${project.name}`);
+        const props: Record<string, string> = skipTests ? { 'skipTests': 'true' } : {};
+
+        return this._runCmd(new MavenComand(
+            `${project.name}-build-exploded`,
+            `Build Exploded: ${project.name}`,
+            ['compile', 'war:exploded'],
+            props,
+            [],
+            project.rootPath
+        ), `Build Exploded: ${project.name}`);
+    }
+
+    /**
+     * clean + install en repo local + exploded.
+     * Uso: primera vez o al cambiar dependencias entre módulos.
+     */
+    async cleanInstall(project: ProjectConfig, skipTests = true): Promise<boolean> {
+        Logger.debug('DEBUG', `cleanInstall: ${project.name}`);
+        const props: Record<string, string> = skipTests ? { 'skipTests': 'true' } : {};
+
+        return this._runCmd(new MavenComand(
+            `${project.name}-clean-install`,
+            `Clean Install: ${project.name}`,
+            ['clean', 'install', 'war:exploded'],
+            props,
+            [],
+            project.rootPath
+        ), `Clean Install: ${project.name}`);
+    }
+
+    /**
+     * clean + compile (sin exploded, sin install).
+     * Uso: verificación rápida de errores de compilación.
+     */
     async cleanCompile(project: ProjectConfig): Promise<boolean> {
-        Logger.debug('DEBUG', `cleanCompile invocado para: ${project.name}`);
-        const cmd = new MavenComand(
+        Logger.debug('DEBUG', `cleanCompile: ${project.name}`);
+
+        return this._runCmd(new MavenComand(
             `${project.name}-clean-compile`,
-            `Clean & Compile: ${project.name}`,
+            `Clean Compile: ${project.name}`,
             ['clean', 'compile'],
             { 'skipTests': 'true' },
             [],
             project.rootPath
-        );
-
-        const valid = await cmd.validate();
-        if (!valid) {
-            Logger.error('MAVEN', `Directorio de proyecto no existe: ${project.rootPath}`);
-            vscode.window.showErrorMessage(
-                `[MM43] El directorio del proyecto no existe: ${project.rootPath}`
-            );
-            return false;
-        }
-
-        Logger.section(`Clean & Compile: ${project.name}`);
-        Logger.info('MAVEN', `🔨 Iniciando clean & compile para: ${project.name}`);
-
-        Logger.debug('DEBUG', 'Ejecutando comando Maven clean compile...');
-        const result = await cmd.execute();
-
-        if (result.success) {
-            Logger.info('MAVEN', `✅ clean & compile completado: ${project.name}`);
-            vscode.window.showInformationMessage(
-                `[MM43] ✅ '${project.name}' compilado correctamente.`
-            );
-        } else {
-            Logger.error('MAVEN', `Error en clean & compile: ${result.error}`);
-            vscode.window.showErrorMessage(
-                `[MM43] ❌ Falló la compilación de '${project.name}'. Revisa el canal "mm43".`
-            );
-        }
-
-        return result.success;
+        ), `Clean Compile: ${project.name}`);
     }
 
-    async cleanInstall(project: ProjectConfig, skipTests = true): Promise<boolean> {
-        Logger.debug('DEBUG', `cleanInstall invocado para: ${project.name}`);
+    /**
+     * clean + package → WAR empaquetado en target/.
+     * Uso: exportación / despliegue en producción.
+     */
+    async cleanPackage(project: ProjectConfig, skipTests = true): Promise<boolean> {
+        Logger.debug('DEBUG', `cleanPackage: ${project.name}`);
         const props: Record<string, string> = skipTests ? { 'skipTests': 'true' } : {};
 
-        const cmd = new MavenComand(
-            `${project.name}-clean-install`,
-            `Clean & Install: ${project.name}`,
-            ['clean', 'install', '-U', 'war:exploded'],
-            props,
-            [],
-            project.rootPath
-        );
-
-        const valid = await cmd.validate();
-        if (!valid) {
-            Logger.error('MAVEN', `Directorio de proyecto no existe: ${project.rootPath}`);
-            vscode.window.showErrorMessage(
-                `[MM43] El directorio del proyecto no existe: ${project.rootPath}`
-            );
-            return false;
-        }
-
-        Logger.section(`Clean & Install: ${project.name}`);
-        Logger.info('MAVEN', `📦 Iniciando clean & install para: ${project.name}`);
-
-        Logger.debug('DEBUG', 'Ejecutando comando Maven clean install...');
-        const result = await cmd.execute();
-
-        if (result.success) {
-            Logger.info('MAVEN', `✅ clean & install completado: ${project.name}`);
-            vscode.window.showInformationMessage(
-                `[MM43] ✅ '${project.name}' instalado correctamente.`
-            );
-        } else {
-            Logger.error('MAVEN', `Error en clean & install: ${result.error}`);
-            vscode.window.showErrorMessage(
-                `[MM43] ❌ Falló el install de '${project.name}'. Revisa el canal "mm43".`
-            );
-        }
-
-        return result.success;
-    }
-
-    async cleanPackage(project: ProjectConfig, skipTests = true): Promise<boolean> {
-        Logger.debug('DEBUG', `cleanPackage invocado para: ${project.name}`);
-        const props: Record<string, string> = skipTests ? { '-DoutputDirectory': 'rutaDestino' } : {};
-        const cmd = new MavenComand(
+        return this._runCmd(new MavenComand(
             `${project.name}-clean-package`,
-            `Clean & Package: ${project.name}`,
-            ['clean', 'package',],
+            `Package WAR: ${project.name}`,
+            ['clean', 'package'],
             props,
             [],
             project.rootPath
-        );
-
-        const valid = await cmd.validate();
-        if (!valid) {
-            Logger.error('MAVEN', `Directorio de proyecto no existe: ${project.rootPath}`);
-            vscode.window.showErrorMessage(
-                `[MM43] El directorio del proyecto no existe: ${project.rootPath}`
-            );
-            return false;
-        }
-
-        Logger.section(`Package WAR: ${project.name}`);
-        Logger.info('MAVEN', `📦 Empaquetando WAR para: ${project.name}`);
-
-        Logger.debug('DEBUG', 'Ejecutando comando Maven clean package...');
-        const result = await cmd.execute();
-
-        if (result.success) {
-            Logger.info('MAVEN', `✅ clean & package completado: ${project.name}`);
-        } else {
-            Logger.error('MAVEN', `Error en clean & package: ${result.error}`);
-            vscode.window.showErrorMessage(
-                `[MM43] ❌ Falló el empaquetado de '${project.name}'. Revisa el canal "mm43".`
-            );
-        }
-        return result.success;
+        ), `Package WAR: ${project.name}`);
     }
 
+    // ─────────────────────────────────────────────
+    // BLOQUE 2: Gestión de dependencias
+    // ─────────────────────────────────────────────
+
+    /**
+     * Fuerza descarga de dependencias actualizadas (-U).
+     * Uso: botón "Actualizar Dependencias".
+     */
+    async updateDependencies(project: ProjectConfig): Promise<boolean> {
+        Logger.debug('DEBUG', `updateDependencies: ${project.name}`);
+
+        // -U es flag de Maven (no property -D), se pasa como fase extra
+        return this._runCmd(new MavenComand(
+            `${project.name}-update-deps`,
+            `Actualizar Dependencias: ${project.name}`,
+            ['dependency:resolve', '-U'],
+            {},
+            [],
+            project.rootPath
+        ), `Actualizar Dependencias: ${project.name}`);
+    }
+
+    /**
+     * Genera classpath completo y lo retorna como string.
+     * Uso: hot-reload (javac incremental necesita classpath exacto).
+     */
     async generarClasspath(project: ProjectConfig): Promise<string> {
-        Logger.debug('DEBUG', `generarClasspath invocado para: ${project.name}`);
+        Logger.debug('DEBUG', `generarClasspath: ${project.name}`);
         const outputFileName = 'classpath.txt';
         const outputPath = path.join(project.rootPath, outputFileName);
-        const rutaDeProyecto = project.rootPath;
 
         const cmd = new MavenComand(
-            `${project.name}-generar-classpath`,
-            `Generar Classpath: ${project.name}`,
+            `${project.name}-classpath`,
+            `Classpath: ${project.name}`,
             ['dependency:build-classpath'],
             { 'mdep.outputFile': outputFileName },
             [],
-            rutaDeProyecto
+            project.rootPath
         );
 
         const valid = await cmd.validate();
         if (!valid) {
-            Logger.error('MAVEN', `Directorio inexistente: ${project.rootPath}`);
-            throw new Error(`Directorio inexistente: ${project.rootPath}`);
+            const msg = `Directorio inexistente: ${project.rootPath}`;
+            Logger.error('MAVEN', msg);
+            throw new Error(msg);
         }
 
-        Logger.info('MAVEN', `🔍 Obteniendo classpath para: ${project.name}`);
-        Logger.debug('DEBUG', 'Ejecutando dependency:build-classpath...');
+        Logger.section(`Classpath: ${project.name}`);
+        Logger.info('MAVEN', `Generando classpath para: ${project.name}`);
         const result = await cmd.execute();
 
         if (!result.success) {
-            Logger.error('MAVEN', `Fallo al ejecutar Maven: ${result.error}`);
-            throw new Error(`Fallo al ejecutar Maven: ${result.error}`);
+            const msg = `Maven falló al generar classpath: ${result.error}`;
+            Logger.error('MAVEN', msg);
+            throw new Error(msg);
         }
 
         if (!fs.existsSync(outputPath)) {
-            Logger.error('MAVEN', `No se generó el archivo ${outputFileName}`);
-            throw new Error(`No se generó el archivo ${outputFileName}`);
+            const msg = `No se generó ${outputFileName}`;
+            Logger.error('MAVEN', msg);
+            throw new Error(msg);
         }
 
         const classpath = fs.readFileSync(outputPath, 'utf8').trim();
-        Logger.debug('DEBUG', `Classpath leído (${classpath.length} caracteres)`);
-
-        try {
-            fs.unlinkSync(outputPath);
-        } catch (e) {
-            Logger.warn('MAVEN', `No se pudo eliminar el archivo temporal: ${outputFileName}`);
-        }
+        Logger.debug('DEBUG', `Classpath leído (${classpath.length} chars)`);
+        try { fs.unlinkSync(outputPath); } catch (_) { /* no crítico */ }
         return classpath;
+    }
+
+    // ─────────────────────────────────────────────
+    // BLOQUE 3: Helper interno
+    // ─────────────────────────────────────────────
+
+    private async _runCmd(cmd: MavenComand, label: string): Promise<boolean> {
+        const valid = await cmd.validate();
+        if (!valid) {
+            const msg = `Directorio no existe: ${(cmd as any).workingDir}`;
+            Logger.error('MAVEN', msg);
+            vscode.window.showErrorMessage(`[MM43] ${msg}`);
+            return false;
+        }
+
+        Logger.section(label);
+        Logger.info('MAVEN', `Iniciando: ${label}`);
+        const result = await cmd.execute();
+
+        if (result.success) {
+            Logger.info('MAVEN', `✅ ${label}`);
+            vscode.window.showInformationMessage(`[MM43] ✅ ${label} OK.`);
+        } else {
+            Logger.error('MAVEN', `❌ ${label} — ${result.error}`);
+            vscode.window.showErrorMessage(`[MM43] ❌ ${label} falló. Revisa el canal "mm43".`);
+        }
+
+        return result.success;
     }
 }

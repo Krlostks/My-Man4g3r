@@ -140,7 +140,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
             Logger.debug('DEBUG', `Iniciando build para: ${project.name}`);
             Logger.show();
-            await mavenManager.cleanCompile(project);
+            await mavenManager.buildExploded(project);
         }),
 
         vscode.commands.registerCommand('mm43.installProject', async (nameOrItem: string | { project: ProjectConfig }) => {
@@ -220,11 +220,6 @@ export async function activate(context: vscode.ExtensionContext) {
             }
         }),
 
-        vscode.commands.registerCommand('mm43.syncProject', (name: string) => {
-            Logger.debug('DEBUG', `Comando mm43.syncProject ejecutado para: ${name}`);
-            serverManager.sync(name);
-        }),
-
         vscode.commands.registerCommand('mm43.detectarBajoCursor', () => {
             Logger.debug('DEBUG', 'Comando mm43.detectarBajoCursor ejecutado');
             const editor = vscode.window.activeTextEditor;
@@ -297,17 +292,17 @@ export async function activate(context: vscode.ExtensionContext) {
                 vscode.window.showWarningMessage('[MM43] No hay proyectos configurados.');
                 return;
             }
-            let projectName = projects[0].name;
+            let project = projects[0];
             if (projects.length > 1) {
                 const selected = await vscode.window.showQuickPick(
-                    projects.map(p => p.name),
+                    projects.map(p => ({ label: p.name, description: p.rootPath, project: p })),
                     { placeHolder: 'Selecciona el proyecto para redeploy completo' }
                 );
                 if (!selected) { return; }
-                projectName = selected;
+                project = selected.project;
             }
-            Logger.debug('DEBUG', `Reiniciando servidor con redeploy para: ${projectName}`);
-            serverManager.fullRedeploy(projectName);
+            Logger.debug('DEBUG', `Reiniciando servidor con redeploy para: ${project.name}`);
+            serverManager.fullRedeploy(project);
         }),
 
         vscode.commands.registerCommand('mm43.showServerLogs', () => {
@@ -452,9 +447,113 @@ export async function activate(context: vscode.ExtensionContext) {
 
             if (selected) {
                 Logger.debug('DEBUG', `Iniciando deploy exploded para: ${selected.project.name}`);
-                await serverManager.deployProject(selected.project);
+                await serverManager.smartDeploy(selected.project);
                 setTimeout(() => serverProvider.refreshDeployedApps(), 5000);
             }
+        })
+    );
+
+    // ─────────────────────────────────────────────
+    // Comandos nuevos: Run, Update Dependencies, Compilar Java
+    // ─────────────────────────────────────────────
+    context.subscriptions.push(
+        vscode.commands.registerCommand('mm43.runProject', async (nameOrItem: string | { project: ProjectConfig }) => {
+            Logger.debug('DEBUG', 'Comando mm43.runProject ejecutado');
+            const projects = ConfigManager.getProjects();
+            if (projects.length === 0) {
+                vscode.window.showWarningMessage('[MM43] No hay proyectos configurados.');
+                return;
+            }
+
+            let project: ProjectConfig | undefined;
+            if (typeof nameOrItem === 'string') {
+                project = projects.find(p => p.name === nameOrItem);
+            } else if (nameOrItem?.project) {
+                project = nameOrItem.project;
+            }
+
+            if (!project) {
+                const selected = await vscode.window.showQuickPick(
+                    projects.map(p => ({ label: p.name, description: p.rootPath, project: p })),
+                    { placeHolder: 'Selecciona el proyecto a ejecutar (Run)' }
+                );
+                if (!selected) { return; }
+                project = selected.project;
+            }
+
+            Logger.section(`Run: ${project.name}`);
+            Logger.info('GENERAL', `▶ Ejecutando flujo Run para: ${project.name}`);
+            Logger.show();
+
+            // Paso 1: Build Exploded
+            const buildOk = await mavenManager.buildExploded(project);
+            if (!buildOk) {
+                Logger.error('GENERAL', `❌ Build falló. Abortando Run para ${project.name}.`);
+                return;
+            }
+
+            // Paso 2: Smart Deploy (deploy o redeploy según estado del servidor)
+            await serverManager.deployAfterBuild(project);
+            setTimeout(() => serverProvider.refreshDeployedApps(), 5000);
+        }),
+
+        vscode.commands.registerCommand('mm43.updateDependencies', async (nameOrItem: string | { project: ProjectConfig }) => {
+            Logger.debug('DEBUG', 'Comando mm43.updateDependencies ejecutado');
+            const projects = ConfigManager.getProjects();
+            if (projects.length === 0) {
+                vscode.window.showWarningMessage('[MM43] No hay proyectos configurados.');
+                return;
+            }
+
+            let project: ProjectConfig | undefined;
+            if (typeof nameOrItem === 'string') {
+                project = projects.find(p => p.name === nameOrItem);
+            } else if (nameOrItem?.project) {
+                project = nameOrItem.project;
+            }
+
+            if (!project) {
+                const selected = await vscode.window.showQuickPick(
+                    projects.map(p => ({ label: p.name, description: p.rootPath, project: p })),
+                    { placeHolder: 'Selecciona el proyecto para actualizar dependencias' }
+                );
+                if (!selected) { return; }
+                project = selected.project;
+            }
+
+            Logger.debug('DEBUG', `Actualizando dependencias para: ${project.name}`);
+            Logger.show();
+            await mavenManager.updateDependencies(project);
+        }),
+
+        vscode.commands.registerCommand('mm43.compilarJava', async () => {
+            Logger.debug('DEBUG', 'Comando mm43.compilarJava ejecutado');
+            const editor = vscode.window.activeTextEditor;
+            if (!editor || !editor.document.fileName.endsWith('.java')) {
+                vscode.window.showWarningMessage('[MM43] Abre un archivo .java para compilar.');
+                return;
+            }
+
+            const filePath = editor.document.fileName;
+            const projects = ConfigManager.getProjects();
+            const project = projects.find(p => filePath.startsWith(p.rootPath));
+
+            if (!project) {
+                vscode.window.showErrorMessage('[MM43] El archivo no pertenece a ningún proyecto configurado.');
+                return;
+            }
+
+            if (!project.classpath) {
+                vscode.window.showWarningMessage('[MM43] Genera el classpath primero (mm43.generateClasspath).');
+                return;
+            }
+
+            // Derivar la ruta relativa desde src/main/java
+            const srcRoot = require('path').join(project.rootPath, 'src', 'main', 'java');
+            const relativePath = require('path').relative(srcRoot, filePath);
+
+            Logger.info('HOTRELOAD', `Compilación individual: ${relativePath}`);
+            await AgenteHotReloadManager.cambioEnCaliente(relativePath, project);
         })
     );
 

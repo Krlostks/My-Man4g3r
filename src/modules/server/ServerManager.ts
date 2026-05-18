@@ -6,7 +6,6 @@ import { ConfigManager } from '../../config/ConfigManager';
 import { ProjectConfig, ServerState } from '../../config/types';
 import { Logger } from '../logger/Logger';
 import { ServerValidator } from './ServerValidator';
-
 import { AgenteHotReloadManager } from '../hotreload/AgenteHotReloadManager';
 import { AssetWatcher } from './AssetWatcher';
 
@@ -16,6 +15,10 @@ export interface DeployedApp {
 }
 
 type StateChangeCallback = (state: ServerState) => void;
+
+// Tiempos estimados (ms) — ajusta si tu servidor es más lento/rápido
+const TIMEOUT_START_MS  = 15_000;
+const TIMEOUT_STOP_MS   =  6_000;
 
 export class ServerManager {
     private serverTerminal: vscode.Terminal | undefined;
@@ -35,264 +38,251 @@ export class ServerManager {
     }
 
     setAssetWatcher(watcher: AssetWatcher): void {
-        Logger.debug('DEBUG', 'setAssetWatcher invocado');
         this.assetWatcher = watcher;
     }
 
+    // ─────────────────────────────────────────────
+    // BLOQUE 1: Helpers privados
+    // ─────────────────────────────────────────────
+
     private setWatchersPaused(paused: boolean): void {
-        Logger.debug('DEBUG', `setWatchersPaused invocado (paused: ${paused})`);
-        if (this.assetWatcher) {
-            this.assetWatcher.setPaused(paused);
-        }
+        this.assetWatcher?.setPaused(paused);
         AgenteHotReloadManager.setPaused(paused);
     }
 
+    /** Ruta resuelta de asadmin (lanza si no configurado). */
     private get asadmin(): string {
         const { serverPath, domain } = ConfigManager.getServerConfig();
         if (!serverPath || !domain) {
-            throw new Error('El servidor no está configurado. Use el botón "Configurar Servidor".');
+            throw new Error('Servidor no configurado. Use "Configurar Servidor".');
         }
-        const asadminPath = ServerValidator.getAsadminPath(serverPath);
-        if (!asadminPath) {
-            throw new Error(`No se pudo encontrar asadmin en la ruta: ${serverPath}`);
+        const p = ServerValidator.getAsadminPath(serverPath);
+        if (!p) {
+            throw new Error(`asadmin no encontrado en: ${serverPath}`);
         }
-        return asadminPath;
-    }
-
-    private get domainPath(): string {
-        const { serverPath, domain } = ConfigManager.getServerConfig();
-        let domainsDir = path.join(serverPath, 'glassfish', 'domains');
-        if (!fs.existsSync(domainsDir)) {
-            domainsDir = path.join(serverPath, 'domains');
-        }
-        return path.join(domainsDir, domain);
+        return p;
     }
 
     private get domain(): string {
         return ConfigManager.getServerConfig().domain;
     }
 
-    private getTerminal(name: string): vscode.Terminal {
-        Logger.debug('DEBUG', `getTerminal invocado para: ${name}`);
-        const existing = vscode.window.terminals.find(t => t.name === name);
-        if (existing) { return existing; }
-        return vscode.window.createTerminal({ name });
+    private get domainPath(): string {
+        const { serverPath, domain } = ConfigManager.getServerConfig();
+        const candidates = [
+            path.join(serverPath, 'glassfish', 'domains', domain),
+            path.join(serverPath, 'domains', domain),
+        ];
+        return candidates.find(fs.existsSync) ?? candidates[0];
     }
 
+    /** Reutiliza terminal existente o crea una nueva. */
+    private getTerminal(name: string): vscode.Terminal {
+        return vscode.window.terminals.find(t => t.name === name)
+            ?? vscode.window.createTerminal({ name });
+    }
+
+    // ─────────────────────────────────────────────
+    // BLOQUE 2: Ciclo de vida del servidor
+    // ─────────────────────────────────────────────
+
     start(): void {
-        Logger.debug('DEBUG', 'start invocado');
         const { serverPath, domain } = ConfigManager.getServerConfig();
         if (!serverPath || !domain) {
-            vscode.window.showErrorMessage('[MM43] Servidor no configurado. Use el botón "Configurar Servidor".');
+            vscode.window.showErrorMessage('[MM43] Servidor no configurado.');
             return;
         }
 
         const validation = ServerValidator.validate(serverPath);
         if (!validation.valid) {
-            vscode.window.showErrorMessage(`[MM43] Error de configuración: ${validation.error}`);
+            vscode.window.showErrorMessage(`[MM43] ${validation.error}`);
             return;
         }
 
         this.setWatchersPaused(true);
         this.onStateChange('starting');
-        Logger.info('SERVER', `Iniciando Servidor (dominio: ${this.domain})...`);
+        Logger.section('Iniciar Servidor');
+        Logger.info('SERVER', `Iniciando dominio: ${this.domain}`);
         Logger.show();
 
         const term = this.getTerminal('MM43 — Server');
         term.show();
-
-        const cmd = `& "${this.asadmin}" start-domain --debug ${this.domain}`;
-        Logger.debug('DEBUG', `Enviando comando de arranque: ${cmd}`);
-        term.sendText(cmd);
-
+        term.sendText(`& "${this.asadmin}" start-domain --debug ${this.domain}`);
         this.serverTerminal = term;
+
         vscode.window.onDidCloseTerminal(t => {
             if (t === this.serverTerminal) {
-                Logger.debug('DEBUG', 'Terminal de servidor cerrada detectada');
                 this.onStateChange('stopped');
                 Logger.warn('SERVER', 'Terminal del servidor cerrada.');
             }
         });
 
         setTimeout(() => {
-            Logger.debug('DEBUG', 'Cambiando estado a running (timeout 12s)');
             this.onStateChange('running');
             this.setWatchersPaused(false);
-            Logger.info('SERVER', 'Servidor iniciado.');
-        }, 12000);
+            Logger.info('SERVER', '✅ Servidor iniciado.');
+        }, TIMEOUT_START_MS);
     }
 
     stop(): void {
-        Logger.debug('DEBUG', 'stop invocado');
         this.setWatchersPaused(true);
         this.onStateChange('stopping');
-        Logger.info('SERVER', 'Deteniendo Servidor...');
+        Logger.section('Detener Servidor');
+        Logger.info('SERVER', `Deteniendo dominio: ${this.domain}`);
         Logger.show();
 
         const term = this.getTerminal('MM43 — Server Stop');
         term.show();
-        const cmd = `& "${this.asadmin}" stop-domain ${this.domain}`;
-        Logger.debug('DEBUG', `Enviando comando de detención: ${cmd}`);
-        term.sendText(cmd);
+        term.sendText(`& "${this.asadmin}" stop-domain ${this.domain}`);
 
         setTimeout(() => {
-            Logger.debug('DEBUG', 'Cambiando estado a stopped (timeout 5s)');
             this.onStateChange('stopped');
             this.setWatchersPaused(false);
-            Logger.info('SERVER', 'Servidor detenido.');
-        }, 5000);
+            Logger.info('SERVER', '✅ Servidor detenido.');
+        }, TIMEOUT_STOP_MS);
     }
 
+    /** Detención síncrona al desactivar la extensión. */
     stopSync(): void {
-        Logger.debug('DEBUG', 'stopSync invocado (deactivate)');
         const { serverPath, domain } = ConfigManager.getServerConfig();
         if (!serverPath || !domain) { return; }
 
-        const asadminPath = path.join(serverPath, 'bin', 'asadmin.bat');
-        if (!fs.existsSync(asadminPath)) { return; }
+        const asadminPath = ServerValidator.getAsadminPath(serverPath);
+        if (!asadminPath) { return; }
 
         const { execSync } = require('child_process');
         try {
-            console.log(`[MM43] Deteniendo servidor ${domain} antes de cerrar...`);
-            Logger.debug('DEBUG', 'Ejecutando stop-domain síncrono...');
             execSync(`"${asadminPath}" stop-domain ${domain}`, {
                 stdio: 'ignore',
-                timeout: 10000
+                timeout: 10_000,
             });
-        } catch (e) {
-            Logger.debug('DEBUG', `Error o timeout en stopSync: ${String(e)}`);
-        }
+        } catch (_) { /* ignorar en deactivate */ }
     }
 
-    async deployProject(project: ProjectConfig): Promise<void> {
-        Logger.debug('DEBUG', `deployProject invocado para: ${project.name}`);
+    // ─────────────────────────────────────────────
+    // BLOQUE 3: Despliegue
+    // ─────────────────────────────────────────────
+
+    /**
+     * Deploy inteligente: usa `redeploy` si la app ya existe, `deploy` si no.
+     * Llama a esto DESPUÉS de buildExploded().
+     */
+    async smartDeploy(project: ProjectConfig): Promise<void> {
         const targetExploded = path.join(project.rootPath, 'target', project.warName);
 
         if (!fs.existsSync(targetExploded)) {
-            Logger.error('SERVER', `Directorio exploded no encontrado: ${targetExploded}`);
-            vscode.window.showErrorMessage(`[MM43] No se encontró el directorio exploded en: ${targetExploded}. Ejecute un Build primero.`);
+            Logger.error('SERVER', `Exploded no encontrado: ${targetExploded}`);
+            vscode.window.showErrorMessage(
+                `[MM43] Carpeta exploded no existe en ${targetExploded}. Ejecuta Build primero.`
+            );
             return;
         }
 
-        Logger.section(`Deploy Exploded: ${project.name}`);
-        Logger.info('SERVER', `Desplegando ${project.name} desde ${targetExploded}...`);
-        Logger.show();
+        const apps = await this.listApplications();
+        const exists = apps.some(a => a.name === project.warName);
 
-        const cmd = `& "${this.asadmin}" deploy --force --name ${project.warName} "${targetExploded}"`;
-        Logger.debug('DEBUG', `Comando de deploy: ${cmd}`);
+        Logger.section(`${exists ? 'Redeploy' : 'Deploy'}: ${project.name}`);
+        Logger.info('SERVER', `${exists ? 'Redeployando' : 'Deployando'} ${project.warName} desde exploded...`);
+        Logger.show();
 
         const term = this.getTerminal(`MM43 — Deploy ${project.name}`);
         term.show();
-        term.sendText(cmd);
-        term.sendText(`Write-Host "[MM43] Despliegue de ${project.warName} enviado al servidor." -ForegroundColor Cyan`);
-    }
 
-    sync(projectName: string): void {
-        Logger.debug('DEBUG', `sync invocado para: ${projectName}`);
-        const projects = ConfigManager.getProjects();
-        const project = projects.find(p => p.name === projectName);
-        if (!project) {
-            Logger.error('SERVER', `Proyecto ${projectName} no encontrado para sync`);
-            vscode.window.showErrorMessage(`[MM43] Proyecto '${projectName}' no encontrado.`);
-            return;
+        if (exists) {
+            term.sendText(`& "${this.asadmin}" redeploy --name ${project.warName} "${targetExploded}"`);
+        } else {
+            term.sendText(`& "${this.asadmin}" deploy --name ${project.warName} "${targetExploded}"`);
         }
 
-        const targetExploded = path.join(project.rootPath, 'target', project.warName);
-        const srcWebapp = path.join(project.rootPath, 'src', 'main', 'webapp');
-
-        if (!fs.existsSync(srcWebapp)) {
-            Logger.warn('SERVER', `No existe la carpeta webapp en ${srcWebapp}`);
-            return;
-        }
-
-        Logger.info('SERVER', `Sincronizando estáticos: ${projectName} (src → target)`);
-        Logger.show();
-
-        const term = this.getTerminal(`MM43 — Sync ${projectName}`);
-        term.show();
-        const cmd = `xcopy "${srcWebapp}\\*" "${targetExploded}\\" /S /E /Y /I /Q`;
-        Logger.debug('DEBUG', `Comando de sync (xcopy): ${cmd}`);
-        term.sendText(cmd);
-        term.sendText(`Write-Host "[MM43] Sync estático de ${projectName} completado." -ForegroundColor Green`);
+        term.sendText(
+            `Write-Host "[MM43] ${exists ? 'Redeploy' : 'Deploy'} de ${project.warName} enviado." -ForegroundColor Cyan`
+        );
     }
 
-    fullRedeploy(projectName: string): void {
-        Logger.debug('DEBUG', `fullRedeploy invocado para: ${projectName}`);
-        const projects = ConfigManager.getProjects();
-        const project = projects.find(p => p.name === projectName);
-        if (!project) return;
+    /**
+     * Flujo RUN completo: buildExploded → smartDeploy.
+     * Equivale al botón "Run" de IntelliJ/Eclipse con servidor GlassFish.
+     * Llama externamente a MavenManager.buildExploded() antes de invocar esto,
+     * o usa runProject() del Context que orquesta todo.
+     */
+    async deployAfterBuild(project: ProjectConfig): Promise<void> {
+        await this.smartDeploy(project);
+    }
 
+    /**
+     * Redeploy completo con limpieza de caches: stop → clean cache → build → start → deploy.
+     * Uso: cuando hay cambios estructurales grandes o el servidor está en estado inconsistente.
+     */
+    fullRedeploy(project: ProjectConfig): void {
         this.setWatchersPaused(true);
         this.onStateChange('stopping');
-        Logger.section(`Redeploy completo: ${projectName}`);
+        Logger.section(`Redeploy Completo: ${project.name}`);
+        Logger.show();
 
-        const term = this.getTerminal(`MM43 — Redeploy ${projectName}`);
+        const targetExploded = path.join(project.rootPath, 'target', project.warName);
+        const term = this.getTerminal(`MM43 — Redeploy ${project.name}`);
         term.show();
 
-        Logger.debug('DEBUG', 'Enviando ráfaga de comandos para full redeploy...');
+        // 1) Detener servidor
         term.sendText(`& "${this.asadmin}" stop-domain ${this.domain}`);
+        // 2) Limpiar caches
         term.sendText(`Remove-Item -Recurse -Force "${this.domainPath}\\osgi-cache\\*" -ErrorAction SilentlyContinue`);
         term.sendText(`Remove-Item -Recurse -Force "${this.domainPath}\\generated\\*" -ErrorAction SilentlyContinue`);
-        const targetExploded = path.join(project.rootPath, 'target', project.warName);
+        // 3) Build exploded
         term.sendText(`Set-Location "${project.rootPath}"`);
-        term.sendText(`mvnd clean install -DskipTests war:exploded`);
+        term.sendText(`mvnd compile war:exploded -DskipTests`);
+        // 4) Iniciar servidor
         term.sendText(`& "${this.asadmin}" start-domain --debug ${this.domain}`);
+        // 5) Redeploy (la app ya existe si llegamos aquí desde fullRedeploy)
         term.sendText(`& "${this.asadmin}" redeploy --name ${project.warName} "${targetExploded}"`);
-        term.sendText(`Write-Host "[MM43] Redeploy de ${projectName} terminado." -ForegroundColor Cyan`);
+        term.sendText(`Write-Host "[MM43] ✅ Redeploy completo de ${project.warName} terminado." -ForegroundColor Cyan`);
 
+        // Estado optimista tras tiempo estimado (start + build + redeploy)
+        const estimatedMs = TIMEOUT_START_MS + 15_000;
         setTimeout(() => {
-            Logger.debug('DEBUG', 'Cambiando estado a running tras fullRedeploy (timeout 25s)');
             this.onStateChange('running');
             this.setWatchersPaused(false);
-        }, 25000);
+            Logger.info('SERVER', '✅ Servidor listo tras redeploy completo.');
+        }, estimatedMs);
     }
 
-    listApplications(): Promise<DeployedApp[]> {
-        Logger.debug('DEBUG', 'listApplications invocado');
-        return new Promise((resolve) => {
-            const cmd = `"${this.asadmin}" list-applications`;
-            Logger.info('SERVER', `Consultando aplicaciones desplegadas...`);
+    // ─────────────────────────────────────────────
+    // BLOQUE 4: Consultas y gestión de aplicaciones
+    // ─────────────────────────────────────────────
 
-            Logger.debug('DEBUG', `Ejecutando exec: ${cmd}`);
-            exec(cmd, { timeout: 15000 }, (error, stdout, stderr) => {
+    listApplications(): Promise<DeployedApp[]> {
+        return new Promise((resolve) => {
+            Logger.info('SERVER', 'Consultando aplicaciones desplegadas...');
+            exec(`"${this.asadmin}" list-applications`, { timeout: 15_000 }, (error, stdout) => {
                 if (error) {
-                    Logger.error('SERVER', `Error al listar aplicaciones: ${error.message}`);
+                    Logger.error('SERVER', `list-applications error: ${error.message}`);
                     resolve([]);
                     return;
                 }
 
                 const apps: DeployedApp[] = [];
-                const lines = stdout.split('\n').map(l => l.trim()).filter(l => l.length > 0);
-
-                for (const line of lines) {
-                    if (line.startsWith('Command') || line.startsWith('Nothing') || line.startsWith('No applications')) {
-                        continue;
-                    }
-
+                for (const line of stdout.split('\n').map(l => l.trim()).filter(Boolean)) {
+                    if (/^(Command|Nothing|No applications)/.test(line)) { continue; }
                     const match = line.match(/^(\S+)\s*<(.+)>$/);
                     if (match) {
                         apps.push({ name: match[1], type: match[2].trim() });
-                    } else if (!line.includes(' ') && line.length > 0) {
+                    } else if (!line.includes(' ')) {
                         apps.push({ name: line, type: 'unknown' });
                     }
                 }
 
-                Logger.debug('DEBUG', `Parseadas ${apps.length} aplicaciones`);
-                Logger.info('SERVER', `${apps.length} aplicación(es) encontrada(s).`);
+                Logger.info('SERVER', `${apps.length} app(s) encontrada(s).`);
                 resolve(apps);
             });
         });
     }
 
     undeploy(appName: string): Promise<boolean> {
-        Logger.debug('DEBUG', `undeploy invocado para: ${appName}`);
         return new Promise((resolve) => {
-            const cmd = `"${this.asadmin}" undeploy ${appName}`;
             Logger.section(`Undeploy: ${appName}`);
-            Logger.debug('DEBUG', `Ejecutando exec: ${cmd}`);
-            exec(cmd, { timeout: 30000 }, (error, stdout, stderr) => {
+            exec(`"${this.asadmin}" undeploy ${appName}`, { timeout: 30_000 }, (error) => {
                 if (error) {
-                    Logger.error('SERVER', `Error al ejecutar undeploy: ${error.message}`);
+                    Logger.error('SERVER', `undeploy error: ${error.message}`);
                     resolve(false);
                     return;
                 }

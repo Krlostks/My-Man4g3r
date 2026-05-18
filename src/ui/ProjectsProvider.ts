@@ -70,36 +70,36 @@ export class ProjectsProvider implements vscode.TreeDataProvider<ProjectItem> {
 
         const p = element.project;
         return [
-            new ProjectItem(p, 'action', 'Limpiar y compilar', {
-                command: 'mm43.buildProject',
-                title: 'limpiar y compilar',
+            new ProjectItem(p, 'action', '▶ Run (Build + Deploy)', {
+                command: 'mm43.runProject',
+                title: 'Run',
                 arguments: [p.name],
             }, 'play'),
-            new ProjectItem(p, 'action', 'Limpiar e instalar (con dependencias)', {
+            new ProjectItem(p, 'action', 'Build Exploded', {
+                command: 'mm43.buildProject',
+                title: 'Build Exploded',
+                arguments: [p.name],
+            }, 'tools'),
+            new ProjectItem(p, 'action', 'Clean Install', {
                 command: 'mm43.installProject',
-                title: 'limpiar e instalar',
+                title: 'Clean Install',
                 arguments: [p.name],
-            }, 'sync'),
-            new ProjectItem(p, 'action', 'Actuzalizar dependencias', {
-                command: 'mm43.startWatcher',
-                title: 'Iniciar Watcher',
+            }, 'package'),
+            new ProjectItem(p, 'action', 'Actualizar Dependencias (-U)', {
+                command: 'mm43.updateDependencies',
+                title: 'Actualizar Dependencias',
                 arguments: [p.name],
-            }, ''),
-            new ProjectItem(p, 'action', 'Sincronizar con el servidor', {
-                command: 'mm43.syncProject',
-                title: 'Sincronizar con el servidor',
-                arguments: [p.name],
-            }, ''),
+            }, 'cloud-download'),
             new ProjectItem(p, 'action', 'Exportar WAR', {
                 command: 'mm43.exportWar',
                 title: 'Exportar WAR',
                 arguments: [p.name],
             }, 'export'),
-            new ProjectItem(p, 'action', 'Eliminar proyecto (undeploy)', {
+            new ProjectItem(p, 'action', 'Eliminar proyecto', {
                 command: 'mm43.removeProject',
                 title: 'Eliminar Proyecto',
-                arguments: [p.name],
-            }, ''),
+                arguments: [{ project: p }],
+            }, 'trash'),
         ];
     }
 }
