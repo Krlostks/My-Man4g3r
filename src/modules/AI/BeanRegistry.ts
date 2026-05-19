@@ -19,6 +19,8 @@ export interface BeanEntry {
     methods: Set<string>;
     /** Campos (properties) detectados */
     fields: Set<string>;
+    /** Tipos de los campos detectados, e.g., 'view' -> 'GeneracionTicketView' */
+    fieldTypes: Map<string, string>;
     /** Timestamp de última modificación para invalidación rápida */
     lastModified: number;
 }
@@ -29,6 +31,17 @@ export class BeanRegistry {
 
     /** Índice inverso: filePath → beanName  (para invalidación O(1)) */
     private byFile: Map<string, string> = new Map();
+
+    /** Índice global de clases Java: className → filePath */
+    private classRegistry: Map<string, string> = new Map();
+
+    registerClass(className: string, filePath: string): void {
+        this.classRegistry.set(className, filePath);
+    }
+
+    getClassFile(className: string): string | undefined {
+        return this.classRegistry.get(className);
+    }
 
     // ─── Escritura ──────────────────────────────────────────────────────────
 

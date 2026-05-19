@@ -1,4 +1,6 @@
 import * as vscode from 'vscode';
+import * as fs from 'fs';
+import * as path from 'path';
 import { ProjectConfig, ServerConfig } from './types';
 
 const SECTION = 'mm43';
@@ -41,11 +43,101 @@ export class ConfigManager {
     }
 
     static getJdkPath(): string {
-        const path = vscode.workspace.getConfiguration(SECTION).get<string>(
-            'jdkPath',
-            'C:\\Java\\jdk1.8.0_181\\bin\\javac.exe'
-        );
-        return path.trim().replace(/[\r\n]/g, '');
+        // 1. Obtener la ruta configurada en la extensión
+        let configuredPath = vscode.workspace.getConfiguration(SECTION).get<string>('jdkPath', '').trim().replace(/[\r\n]/g, '');
+
+        if (configuredPath) {
+            if (fs.existsSync(configuredPath)) {
+                try {
+                    const stat = fs.statSync(configuredPath);
+                    if (stat.isDirectory()) {
+                        const javacPath = path.join(configuredPath, 'bin', process.platform === 'win32' ? 'javac.exe' : 'javac');
+                        if (fs.existsSync(javacPath)) {
+                            return javacPath;
+                        }
+                    } else {
+                        return configuredPath;
+                    }
+                } catch (e) {
+                    // Ignorar error al verificar stats y continuar
+                }
+            } else if (configuredPath.toLowerCase() === 'javac' || configuredPath.toLowerCase() === 'javac.exe') {
+                const resolved = this.findJavacInPath();
+                if (resolved) { return resolved; }
+            }
+        }
+
+        // 2. Intentar obtener el JDK desde el AS_JAVA del servidor
+        const { serverPath } = this.getServerConfig();
+        if (serverPath) {
+            const candidates = [
+                path.join(serverPath, 'glassfish', 'config', 'asenv.bat'),
+                path.join(serverPath, 'config', 'asenv.bat'),
+            ];
+            for (const asenvPath of candidates) {
+                if (fs.existsSync(asenvPath)) {
+                    try {
+                        const content = fs.readFileSync(asenvPath, 'utf-8');
+                        const match = content.match(/^\s*set\s+AS_JAVA\s*=\s*(.+)\s*$/mi);
+                        if (match) {
+                            const javaHome = match[1].trim().replace(/"/g, '');
+                            const javacPath = path.join(javaHome, 'bin', process.platform === 'win32' ? 'javac.exe' : 'javac');
+                            if (fs.existsSync(javacPath)) {
+                                return javacPath;
+                            }
+                        }
+                    } catch (e) {
+                        // Ignorar errores leyendo asenv.bat
+                    }
+                }
+            }
+        }
+
+        // 3. Intentar obtenerlo desde la variable de entorno JAVA_HOME
+        const envJavaHome = process.env.JAVA_HOME;
+        if (envJavaHome) {
+            const javacPath = path.join(envJavaHome, 'bin', process.platform === 'win32' ? 'javac.exe' : 'javac');
+            if (fs.existsSync(javacPath)) {
+                return javacPath;
+            }
+        }
+
+        // 4. Intentar obtenerlo desde la configuración estándar de extensiones de Java en VS Code
+        const javaHomeConfig = vscode.workspace.getConfiguration('java').get<string>('home') ||
+            vscode.workspace.getConfiguration('java.jdt.ls.java').get<string>('home');
+        if (javaHomeConfig) {
+            const javacPath = path.join(javaHomeConfig, 'bin', process.platform === 'win32' ? 'javac.exe' : 'javac');
+            if (fs.existsSync(javacPath)) {
+                return javacPath;
+            }
+        }
+
+        // 5. Buscar en la variable de entorno PATH del sistema
+        const resolved = this.findJavacInPath();
+        if (resolved) {
+            return resolved;
+        }
+
+        // 6. Fallback final a 'javac'
+        return 'javac';
+    }
+
+    private static findJavacInPath(): string | undefined {
+        const pathEnv = process.env.PATH || '';
+        const delimiter = process.platform === 'win32' ? ';' : ':';
+        const pathDirs = pathEnv.split(delimiter);
+        const exeName = process.platform === 'win32' ? 'javac.exe' : 'javac';
+        for (const dir of pathDirs) {
+            const fullPath = path.join(dir, exeName);
+            try {
+                if (fs.existsSync(fullPath)) {
+                    return fullPath;
+                }
+            } catch (e) {
+                // Ignorar directorios inaccesibles en el PATH
+            }
+        }
+        return undefined;
     }
 
     static getHotReloadPort(): number {

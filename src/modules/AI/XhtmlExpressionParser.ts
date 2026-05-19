@@ -20,6 +20,8 @@ export interface ElExpression {
     memberName: string;
     /** ¿El cursor está sobre el beanName (true) o el memberName (false)? */
     cursorOnBean: boolean;
+    /** Si es un miembro anidado, la parte específica clickeada (ej: "view" o "variable") */
+    clickedPart?: string;
 }
 
 export class XhtmlExpressionParser {
@@ -37,13 +39,13 @@ export class XhtmlExpressionParser {
         const col = position.character;
 
         // Buscar TODAS las expresiones EL en la línea
-        // Patrón: #{ ... } con al menos un punto
-        const RE_EL = /\#\{([a-zA-Z_][\w]*?)\.([a-zA-Z_][\w]*?)(?:[(\s,}])/g;
+        // Patrón: #{ ... } con al menos un punto, permitiendo múltiples puntos
+        const RE_EL = /\#\{([a-zA-Z_][\w]*?)\.([a-zA-Z_][\w.]*?)(?=[(\s,}])/g;
 
         let match: RegExpExecArray | null;
         while ((match = RE_EL.exec(line)) !== null) {
             const exprStart = match.index;           // posición del '#'
-            const exprEnd   = RE_EL.lastIndex;       // posición tras el último char capturado
+            const exprEnd   = RE_EL.lastIndex;       // posición tras el último char capturado (no incluye el lookahead)
 
             // ¿El cursor está dentro de esta expresión?
             if (col < exprStart || col > exprEnd) { continue; }
@@ -57,12 +59,28 @@ export class XhtmlExpressionParser {
             const memberStart = beanEnd + 1;                  // +1 por "."
             const memberEnd   = memberStart + memberName.length;
 
-            const cursorOnBean = col >= beanStart && col <= beanEnd;
-            const cursorOnMember = col >= memberStart && col <= memberEnd;
+            let cursorOnBean = col >= beanStart && col <= beanEnd;
+            let cursorOnMember = col >= memberStart && col <= memberEnd;
 
+            // Si el cursor está sobre la llave de cierre o similar, asumimos que no es nada, o podemos devolver el miembro
             if (!cursorOnBean && !cursorOnMember) { continue; }
 
-            return { beanName, memberName, cursorOnBean };
+            // Si es un member name anidado, determinar sobre qué parte exacta está el cursor
+            let clickedPart = memberName;
+            if (cursorOnMember && memberName.includes('.')) {
+                const parts = memberName.split('.');
+                let currentStart = memberStart;
+                for (const part of parts) {
+                    const currentEnd = currentStart + part.length;
+                    if (col >= currentStart && col <= currentEnd) {
+                        clickedPart = part;
+                        break;
+                    }
+                    currentStart = currentEnd + 1; // +1 por el punto
+                }
+            }
+
+            return { beanName, memberName, cursorOnBean, clickedPart };
         }
 
         return undefined;

@@ -264,7 +264,7 @@ export class AgenteHotReloadManager {
         const latestProjects = ConfigManager.getProjects();
         const latestProject = latestProjects.find(p => p.name === project.name) || project;
 
-        const javaAbsPath = path.join(latestProject.rootPath, 'src', 'main', 'java', filename);
+        const javaAbsPath = path.isAbsolute(filename) ? filename : path.join(latestProject.rootPath, 'src', 'main', 'java', filename);
         const compileSuccess = await this.compilarIncremental(javaAbsPath, latestProject);
         if (!compileSuccess) { 
             Logger.debug('DEBUG', `Compilación falló para ${filename}, abortando HotSwap`);
@@ -283,7 +283,7 @@ export class AgenteHotReloadManager {
         const classFile = path.join(
             latestProject.rootPath, 'target', latestProject.warName,
             'WEB-INF', 'classes',
-            filename.replace(/\.java$/, '.class')
+            relativeToSrc.replace(/\.java$/, '.class')
         );
 
         if (!fs.existsSync(classFile)) { 

@@ -3,7 +3,7 @@
   "publisher": "KrlosTKS",
   "displayName": "My M4nag3r",
   "description": "E ",
-  "version": "0.1.1",
+  "version": "0.1.3",
   "engines": {
     "vscode": "^1.107.0"
   },
@@ -238,8 +238,8 @@
       "properties": {
         "mm43.jdkPath": {
           "type": "string",
-          "default": "C:\\Java\\jdk1.8.0_181\\bin\\javac.exe",
-          "description": "Ruta absoluta al ejecutable javac (JDK).",
+          "default": "",
+          "description": "Ruta absoluta al ejecutable javac o directorio JDK. Si se deja vacío, se detectará automáticamente.",
           "order": 1
         },
         "mm43.serverPath": {

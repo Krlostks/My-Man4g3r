@@ -29,8 +29,8 @@ const RE_CLASS = /public\s+class\s+(\w+)/;
 /** Captura métodos públicos (no static, no constructor): visibilidad + tipo + nombre + '(' */
 const RE_METHOD = /^\s*public\s+(?!static\s+(?:void\s+main|class))(?:\w[\w<>\[\],\s]*?\s+)(\w+)\s*\(/gm;
 
-/** Captura campos de instancia públicos y privados con getter implícito */
-const RE_FIELD = /^\s*(?:private|protected|public)\s+(?!static\s|final\s+static\s)(?:\w[\w<>\[\],\s]*?\s+)(\w+)\s*[=;]/gm;
+/** Captura campos de instancia públicos y privados con getter implícito, extrayendo el tipo (grupo 1) y el nombre (grupo 2) */
+const RE_FIELD = /^\s*(?:private|protected|public)\s+(?!static\s|final\s+static\s)([A-Za-z0-9_<>\[\],\s.]+?)\s+(\w+)\s*[=;]/gm;
 
 // ─── BeanScanner ───────────────────────────────────────────────────────────
 
@@ -124,12 +124,16 @@ export class BeanScanner {
         lastModified: number
     ): BeanEntry | undefined {
 
+        // Nombre de la clase
+        const classMatch = RE_CLASS.exec(content);
+        if (classMatch) {
+            this.registry.registerClass(classMatch[1], filePath);
+        }
+
         // ¿Tiene @Named?
         const namedMatch = RE_NAMED.exec(content);
         if (!namedMatch) { return undefined; }
 
-        // Nombre de la clase
-        const classMatch = RE_CLASS.exec(content);
         if (!classMatch) { return undefined; }
         const className = classMatch[1];
 
@@ -152,13 +156,17 @@ export class BeanScanner {
 
         // Fields (propiedades)
         const fields = new Set<string>();
+        const fieldTypes = new Map<string, string>();
         let fMatch: RegExpExecArray | null;
         const reField = new RegExp(RE_FIELD.source, 'gm');
         while ((fMatch = reField.exec(content)) !== null) {
-            fields.add(fMatch[1]);
+            const fieldType = fMatch[1].trim();
+            const fieldName = fMatch[2];
+            fields.add(fieldName);
+            fieldTypes.set(fieldName, fieldType);
         }
 
-        return { beanName, className, filePath, methods, fields, lastModified };
+        return { beanName, className, filePath, methods, fields, fieldTypes, lastModified };
     }
 
     /** Colecta recursivamente todos los .java bajo un directorio */
