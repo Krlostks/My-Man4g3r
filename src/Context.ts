@@ -930,7 +930,7 @@ function setupFacesIntellisense(contexto: vscode.ExtensionContext, beanRegistry:
     // Proveedores EL (integración con módulo AI)
     const elCompletion = new ElCompletionProvider(beanRegistry);
     const elHover = new ElHoverProvider(beanRegistry);
-    const elDiagnostics = new ElDiagnosticProvider(beanRegistry);
+    //const elDiagnostics = new ElDiagnosticProvider(beanRegistry);
     const elRename = new ElRenameProvider(beanRegistry);
 
     // registros
@@ -944,7 +944,7 @@ function setupFacesIntellisense(contexto: vscode.ExtensionContext, beanRegistry:
         vscode.languages.registerHoverProvider(xhtmlSelector, elHover),
         vscode.languages.registerHoverProvider(xhtmlSelector, proveedorDeHover),
         vscode.languages.registerRenameProvider(xhtmlSelector, elRename),
-        elDiagnostics
+        //elDiagnostics
     )
 
     //comando para limpiar cache
@@ -1039,8 +1039,8 @@ async function setupBeanIndex(context: vscode.ExtensionContext): Promise<BeanReg
 
 export function deactivate() {
     Logger.debug('DEBUG', 'Desactivando extensión MM43...');
-    // if (globalServerManager) {
-    //     globalServerManager.stopSync();
+    if (globalServerManager) {
+         globalServerManager.stop();
 
-
+    }
 }
