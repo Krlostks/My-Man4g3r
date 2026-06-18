@@ -4,6 +4,7 @@ import { XmlNamespace, DEFAULT_NAMESPACES } from "../models/XmlNamespace";
 import { ComponentDefinition } from '../models';
 import { ComponentExtractor } from '../parser/ComponentExtractor';
 import * as fs from 'node:fs';
+import { Logger } from '../../logger/Logger';
 
 export class NamespacerRegistry {
 
@@ -38,8 +39,7 @@ export class NamespacerRegistry {
         const regex = new RegExp(`xmlns:([\\w]+)=["']${url.replace(/\//g, '\\/')}["']`);
         const match = texto.match(regex);
         if (match) {
-            console.log("el match es: ", match[1]);
-
+            console.log("el match es: ", match[1]);            
             return `<${match[1]}:`;
         }
         // fallback: método original corregido

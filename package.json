@@ -3,7 +3,12 @@
   "publisher": "KrlosTKS",
   "displayName": "My M4nag3r",
   "description": "E ",
-  "version": "0.2.1",
+  "version": "0.2.2",
+  "files": [
+    "dist/**",
+    "src/**/*.ts",
+    "src/modules/xhtml/data/**/*.json"
+  ],
   "engines": {
     "vscode": "^1.85.0"
   },
