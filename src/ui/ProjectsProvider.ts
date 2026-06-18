@@ -22,7 +22,7 @@ export class ProjectItem extends vscode.TreeItem {
 
         if (kind === 'project') {
             this.description = path.basename(project.rootPath);
-            this.tooltip = `Proyecto Maven: ${project.rootPath}${project.classpath ? '\n(Classpath Generado ✅)' : ''}`;
+            this.tooltip = `Proyecto Maven: ${project.rootPath}${project.classpath ? '\n(Classpath Generado  )' : ''}`;
             this.iconPath = new vscode.ThemeIcon('package');
             this.contextValue = 'mm43Project';
         } else {

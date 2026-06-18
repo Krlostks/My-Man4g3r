@@ -4,8 +4,10 @@ import * as path from 'path';
 import { ProjectConfig } from '../../config/types';
 import { MavenComand } from './MavenComand';
 import { Logger } from '../logger/Logger';
+import { ServerManager } from '../server/ServerManager';
 
 export class MavenManager {
+    constructor(private serverManager: ServerManager) { }
 
     // ─────────────────────────────────────────────
     // BLOQUE 1: Ciclo de vida principal
@@ -18,15 +20,30 @@ export class MavenManager {
     async buildExploded(project: ProjectConfig, skipTests = true): Promise<boolean> {
         Logger.debug('DEBUG', `buildExploded: ${project.name}`);
         const props: Record<string, string> = skipTests ? { 'skipTests': 'true' } : {};
+        Logger.info('SERVER', 'se consultará el estado del servidor')
+        const result = this.serverManager.getServerState()
+        console.log("cd essssss:" + result);
+        if (result == "stopped") {
+            console.log("el servidor esta detenido se va a ejecutar un clean, compile y war:exploded");
 
-        return this._runCmd(new MavenComand(
-            `${project.name}-build-exploded`,
-            `Build Exploded: ${project.name}`,
-            ['compile', 'war:exploded'],
-            props,
-            [],
-            project.rootPath
-        ), `Build Exploded: ${project.name}`);
+            return this._runCmd(new MavenComand(
+                `${project.name}-build-exploded`,
+                `Build Exploded: ${project.name}`,
+                ['clean', 'compile', 'war:exploded'],
+                props,
+                [],
+                project.rootPath
+            ), `Build Exploded: ${project.name}`);
+        } else {
+            return this._runCmd(new MavenComand(
+                `${project.name}-build-exploded`,
+                `Build Exploded: ${project.name}`,
+                ['compile', 'war:exploded'],
+                props,
+                [],
+                project.rootPath
+            ), `Build Exploded: ${project.name}`);
+        }
     }
 
     /**
@@ -169,8 +186,8 @@ export class MavenManager {
         const result = await cmd.execute();
 
         if (result.success) {
-            Logger.info('MAVEN', `✅ ${label}`);
-            vscode.window.showInformationMessage(`[MM43] ✅ ${label} OK.`);
+            Logger.info('MAVEN', `  ${label}`);
+            vscode.window.showInformationMessage(`[MM43]   ${label} OK.`);
         } else {
             Logger.error('MAVEN', `❌ ${label} — ${result.error}`);
             vscode.window.showErrorMessage(`[MM43] ❌ ${label} falló. Revisa el canal "mm43".`);

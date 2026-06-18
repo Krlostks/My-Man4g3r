@@ -17,14 +17,17 @@ export interface DeployedApp {
 type StateChangeCallback = (state: ServerState) => void;
 
 // Tiempos estimados (ms) — ajusta si tu servidor es más lento/rápido
-const TIMEOUT_START_MS  = 15_000;
-const TIMEOUT_STOP_MS   =  6_000;
+const TIMEOUT_START_MS = 300_000;
+const TIMEOUT_STOP_MS = 6_000;
+const POLL_INTERVAL_MS = 1_500;
 
 export class ServerManager {
     private serverTerminal: vscode.Terminal | undefined;
     private onStateChange: StateChangeCallback;
     private assetWatcher: AssetWatcher | undefined;
     private currentState: ServerState = 'stopped';
+    private pollingTimers: ReturnType<typeof setTimeout>[] = [];
+
 
     constructor(onStateChange: StateChangeCallback) {
         this.onStateChange = (state) => {
@@ -82,11 +85,63 @@ export class ServerManager {
             ?? vscode.window.createTerminal({ name });
     }
 
+
+    private clearPollingTimers(): void {
+            for (const timer of this.pollingTimers) {
+                clearTimeout(timer);
+            }
+            this.pollingTimers = [];
+        }
+
+    private waitForState(
+            expectedState: ServerState,
+            maxWaitMs: number,
+            label: string
+        ): Promise<ServerState> {
+            return new Promise((resolve) => {
+                const startTime = Date.now();
+                let attempt = 0;
+    
+                const poll = async () => {
+                    attempt++;
+                    const elapsed = Date.now() - startTime;
+    
+                    if (elapsed >= maxWaitMs) {
+                        Logger.warn('SERVER', 
+                            `Timeout de ${label} tras ${maxWaitMs}ms (${attempt} intentos). Estado final: ${this.currentState}`
+                        );
+                        resolve(this.currentState);
+                        return;
+                    }
+    
+                    const state = await this.checkServerStatus();
+                    Logger.debug('DEBUG', 
+                        `[${label}] Intento ${attempt}: estado=${state} (${elapsed}ms / ${maxWaitMs}ms)`
+                    );
+    
+                    if (state === expectedState) {
+                        Logger.info('SERVER', 
+                            `Servidor ${label} exitosamente en ${elapsed}ms (${attempt} intentos).`
+                        );
+                        resolve(state);
+                        return;
+                    }
+    
+                    // Programar siguiente verificación
+                    const timer = setTimeout(poll, POLL_INTERVAL_MS);
+                    this.pollingTimers.push(timer);
+                };
+    
+                // Primera verificación inmediata
+                poll();
+            });
+        }
+
     // ─────────────────────────────────────────────
     // BLOQUE 2: Ciclo de vida del servidor
     // ─────────────────────────────────────────────
 
-    start(): void {
+        start(): void {
         const { serverPath, domain } = ConfigManager.getServerConfig();
         if (!serverPath || !domain) {
             vscode.window.showErrorMessage('[MM43] Servidor no configurado.');
@@ -99,6 +154,7 @@ export class ServerManager {
             return;
         }
 
+        this.clearPollingTimers();
         this.setWatchersPaused(true);
         this.onStateChange('starting');
         Logger.section('Iniciar Servidor');
@@ -112,38 +168,32 @@ export class ServerManager {
 
         vscode.window.onDidCloseTerminal(t => {
             if (t === this.serverTerminal) {
+                this.clearPollingTimers();
                 this.onStateChange('stopped');
                 Logger.warn('SERVER', 'Terminal del servidor cerrada.');
             }
         });
 
-        setTimeout(() => {
-            this.onStateChange('running');
-            this.setWatchersPaused(false);
-            Logger.info('SERVER', '✅ Servidor iniciado.');
-        }, TIMEOUT_START_MS);
+        // ── POLLING REAL en lugar de setTimeout fijo ──
+        this.waitForState('running', TIMEOUT_START_MS, 'iniciando').then((finalState) => {
+            this.onStateChange(finalState);
+            this.setWatchersPaused(finalState !== 'running');
+            if (finalState === 'running') {
+                Logger.info('SERVER', '  Servidor iniciado correctamente.');
+            } else {
+                Logger.error('SERVER', `  Fallo al iniciar servidor. Estado: ${finalState}`);
+            }
+        });
     }
 
+    /** Detención síncrona al desactivar la extensión. */
     stop(): void {
+        this.clearPollingTimers();
         this.setWatchersPaused(true);
         this.onStateChange('stopping');
         Logger.section('Detener Servidor');
         Logger.info('SERVER', `Deteniendo dominio: ${this.domain}`);
         Logger.show();
-
-        const term = this.getTerminal('MM43 — Server Stop');
-        term.show();
-        term.sendText(`& "${this.asadmin}" stop-domain ${this.domain}`);
-
-        setTimeout(() => {
-            this.onStateChange('stopped');
-            this.setWatchersPaused(false);
-            Logger.info('SERVER', '✅ Servidor detenido.');
-        }, TIMEOUT_STOP_MS);
-    }
-
-    /** Detención síncrona al desactivar la extensión. */
-    stopSync(): void {
         const { serverPath, domain } = ConfigManager.getServerConfig();
         if (!serverPath || !domain) { return; }
 
@@ -157,6 +207,18 @@ export class ServerManager {
                 timeout: 10_000,
             });
         } catch (_) { /* ignorar en deactivate */ }
+        
+
+        // ── POLLING REAL en lugar de setTimeout fijo ──
+        this.waitForState('stopped', TIMEOUT_STOP_MS, 'deteniendo').then((finalState) => {
+            this.onStateChange(finalState);
+            this.setWatchersPaused(finalState !== 'stopped');
+            if (finalState === 'stopped') {
+                Logger.info('SERVER', '  Servidor detenido correctamente.');
+            } else {
+                Logger.error('SERVER', `  Fallo al detener servidor. Estado: ${finalState}`);
+            }
+        });
     }
 
     // ─────────────────────────────────────────────
@@ -235,14 +297,14 @@ export class ServerManager {
         term.sendText(`& "${this.asadmin}" start-domain --debug ${this.domain}`);
         // 5) Redeploy (la app ya existe si llegamos aquí desde fullRedeploy)
         term.sendText(`& "${this.asadmin}" redeploy --name ${project.warName} "${targetExploded}"`);
-        term.sendText(`Write-Host "[MM43] ✅ Redeploy completo de ${project.warName} terminado." -ForegroundColor Cyan`);
+        term.sendText(`Write-Host "[MM43]   Redeploy completo de ${project.warName} terminado." -ForegroundColor Cyan`);
 
         // Estado optimista tras tiempo estimado (start + build + redeploy)
         const estimatedMs = TIMEOUT_START_MS + 15_000;
         setTimeout(() => {
             this.onStateChange('running');
             this.setWatchersPaused(false);
-            Logger.info('SERVER', '✅ Servidor listo tras redeploy completo.');
+            Logger.info('SERVER', '  Servidor listo tras redeploy completo.');
         }, estimatedMs);
     }
 
@@ -286,7 +348,7 @@ export class ServerManager {
                     resolve(false);
                     return;
                 }
-                Logger.info('SERVER', `✅ Undeploy de '${appName}' exitoso.`);
+                Logger.info('SERVER', `  Undeploy de '${appName}' exitoso.`);
                 resolve(true);
             });
         });
@@ -295,6 +357,13 @@ export class ServerManager {
     /**
      * Consulta el estado real del servidor ejecutando 'asadmin list-domains'.
      */
+
+    async verifacionRapidaDeServidor(): Promise<boolean> {
+
+
+
+        return true;
+    }
     async checkServerStatus(): Promise<ServerState> {
         return new Promise((resolve) => {
             Logger.info('SERVER', 'Consultando estado real del servidor...');

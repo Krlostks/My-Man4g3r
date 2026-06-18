@@ -23,9 +23,9 @@ export class AgenteHotReloadManager {
             filters: { 'Java Archive': ['jar'] }
         });
 
-        if (!uris || uris.length === 0) { 
+        if (!uris || uris.length === 0) {
             Logger.debug('DEBUG', 'Importación de agente cancelada por el usuario');
-            return; 
+            return;
         }
         const agentPath = uris[0].fsPath;
 
@@ -54,9 +54,9 @@ export class AgenteHotReloadManager {
             await ConfigManager.setAgentPath(agentPath);
             await ConfigManager.setAgentMode('dcevm');
             vscode.window.showInformationMessage(
-                '✅ Agente importado con DCEVM detectado. Hot-Reload completo habilitado (cambios estructurales soportados).'
+                '  Agente importado con DCEVM detectado. Hot-Reload completo habilitado (cambios estructurales soportados).'
             );
-            Logger.info('HOTRELOAD', '✅ Modo DCEVM activado — soporte estructural completo.');
+            Logger.info('HOTRELOAD', '  Modo DCEVM activado — soporte estructural completo.');
         } else {
             Logger.debug('DEBUG', 'DCEVM NO detectado, solicitando elección al usuario');
             const choice = await vscode.window.showWarningMessage(
@@ -95,7 +95,7 @@ export class AgenteHotReloadManager {
 
         const asadmin = path.join(serverPath, 'bin', 'asadmin.bat');
         const port = ConfigManager.getHotReloadPort();
-        
+
         const jvmOpt = `-javaagent:${agentPath}`.replace(/:/g, '\\:');
         const portOpt = `-Dmm43.agent.port=${port}`;
 
@@ -142,9 +142,9 @@ export class AgenteHotReloadManager {
             'Entendido, abrir archivos'
         );
 
-        if (disclaimer !== 'Entendido, abrir archivos') { 
+        if (disclaimer !== 'Entendido, abrir archivos') {
             Logger.debug('DEBUG', 'Usuario canceló apertura de archivos DCEVM');
-            return; 
+            return;
         }
 
         const asenvPath = DcevmValidator.getAsenvPath();
@@ -163,12 +163,12 @@ export class AgenteHotReloadManager {
         Logger.debug('DEBUG', 'removeAgent invocado');
         await ConfigManager.removeAgent();
         Logger.info('HOTRELOAD', 'Agente eliminado de la configuración.');
-        vscode.window.showInformationMessage('✅ Agente de Hot-Reload eliminado.');
+        vscode.window.showInformationMessage('  Agente de Hot-Reload eliminado.');
     }
 
     private static changeQueue: { filename: string, project: ProjectConfig }[] = [];
     private static processTimer: ReturnType<typeof setTimeout> | undefined;
-    private static THRESHOLD = 50; 
+    private static THRESHOLD = 50;
     private static lastHashes: Map<string, string> = new Map();
     private static isPaused: boolean = false;
 
@@ -212,7 +212,7 @@ export class AgenteHotReloadManager {
 
         this.processTimer = setTimeout(() => {
             this.procesarCola();
-        }, 800); 
+        }, 800);
     }
 
     private static async procesarCola(): Promise<void> {
@@ -237,7 +237,7 @@ export class AgenteHotReloadManager {
                 return;
             } else if (!choice) {
                 Logger.debug('DEBUG', 'Procesamiento de cola cancelado por el usuario');
-                return; 
+                return;
             }
         }
 
@@ -256,9 +256,9 @@ export class AgenteHotReloadManager {
         const agentPath = ConfigManager.getAgentPath();
         const agentMode = ConfigManager.getAgentMode();
 
-        if (!agentPath || agentMode === 'none') { 
+        if (!agentPath || agentMode === 'none') {
             Logger.debug('DEBUG', 'HotSwap omitido: agente no configurado o modo none');
-            return; 
+            return;
         }
 
         const latestProjects = ConfigManager.getProjects();
@@ -266,9 +266,9 @@ export class AgenteHotReloadManager {
 
         const javaAbsPath = path.isAbsolute(filename) ? filename : path.join(latestProject.rootPath, 'src', 'main', 'java', filename);
         const compileSuccess = await this.compilarIncremental(javaAbsPath, latestProject);
-        if (!compileSuccess) { 
+        if (!compileSuccess) {
             Logger.debug('DEBUG', `Compilación falló para ${filename}, abortando HotSwap`);
-            return; 
+            return;
         }
 
         let relativeToSrc = filename;
@@ -286,9 +286,9 @@ export class AgenteHotReloadManager {
             relativeToSrc.replace(/\.java$/, '.class')
         );
 
-        if (!fs.existsSync(classFile)) { 
+        if (!fs.existsSync(classFile)) {
             Logger.debug('DEBUG', `Archivo .class no encontrado: ${classFile}`);
-            return; 
+            return;
         }
 
         Logger.debug('DEBUG', `Enviando ${className} al agente HotSwap...`);
@@ -322,7 +322,7 @@ export class AgenteHotReloadManager {
         }
 
         const allProjects = ConfigManager.getProjects();
-        const localClassDirs = allProjects.map(p => 
+        const localClassDirs = allProjects.map(p =>
             path.join(p.rootPath, 'target', p.warName, 'WEB-INF', 'classes').replace(/\\/g, '/')
         ).join(';');
 
@@ -330,7 +330,7 @@ export class AgenteHotReloadManager {
         if (!fs.existsSync(tempDir)) { fs.mkdirSync(tempDir, { recursive: true }); }
 
         const argFile = path.join(tempDir, `javac_args_${Date.now()}.txt`);
-        
+
         const fullClasspath = `${localClassDirs};${classpath.replace(/\\/g, '/')}`;
         const argContent = `-encoding UTF-8\n-cp "${fullClasspath}"\n-d "${outputDir.replace(/\\/g, '/')}"\n"${javaFile.replace(/\\/g, '/')}"`;
 
@@ -355,7 +355,7 @@ export class AgenteHotReloadManager {
                     Logger.error('HOTRELOAD', `Error de compilación en ${path.basename(javaFile)}: ${stderr || stdout}`);
                     resolve(false);
                 } else {
-                    Logger.info('HOTRELOAD', `✅ Compilación de ${path.basename(javaFile)} exitosa.`);
+                    Logger.info('HOTRELOAD', `  Compilación de ${path.basename(javaFile)} exitosa.`);
                     resolve(true);
                 }
             });

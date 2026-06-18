@@ -23,6 +23,9 @@ import { ServerValidator } from './modules/server/ServerValidator';
 import { BeanRegistry } from './modules/AI/BeanRegistry';
 import { BeanScanner } from './modules/AI/BeanScanner';
 import { BeanDefinitionProvider } from './modules/AI/BeanDefinitionProvider';
+import { NamespacerRegistry } from "./modules/xhtml/registry/NamespaceRegistry";
+import { XhtmlHoverProvider } from "./modules/xhtml/provider/XhtmlHoverProvider";
+import { XhtmlCompletionProvider } from "./modules/xhtml/provider/XhtmlCompletionProvider";
 
 let globalServerManager: ServerManager | undefined;
 
@@ -30,7 +33,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
     Logger.init(context);
     Logger.debug('DEBUG', 'Iniciando activación de MM43...');
-    vscode.window.showInformationMessage('MM43: Extension Activada y Lista ✅');
+    vscode.window.showInformationMessage('MM43: Extension Activada y Lista  ');
 
     const logWebview = new LogWebviewProvider(context.extensionUri);
     Logger.setWebview(logWebview);
@@ -43,7 +46,7 @@ export async function activate(context: vscode.ExtensionContext) {
     const projectsProvider = new ProjectsProvider();
     const serverProvider = new ServerProvider();
     context.subscriptions.push(statusBar);
-    
+
     globalServerManager = new ServerManager((state) => {
         statusBar.setServerState(state);
         serverProvider.setServerState(state);
@@ -63,7 +66,7 @@ export async function activate(context: vscode.ExtensionContext) {
     const assetWatcher = new AssetWatcher(() => serverManager.getServerState() === 'running');
     serverManager.setAssetWatcher(assetWatcher);
     const cacheCleaner = new CacheCleaner();
-    const mavenManager = new MavenManager();
+    const mavenManager = new MavenManager(globalServerManager);
     const agente = new AgenteHotReloadManager();
 
     const databaseProvider = new DatabaseProvider();
@@ -212,7 +215,7 @@ export async function activate(context: vscode.ExtensionContext) {
                 try {
                     const sourceWarPath = vscode.Uri.file(`${proyecto.rootPath}/target/${proyecto.warName}.war`);
                     await vscode.workspace.fs.copy(sourceWarPath, targetUri, { overwrite: true });
-                    vscode.window.showInformationMessage(`[MM43] ✅ WAR exportado exitosamente a ${targetUri.fsPath}`);
+                    vscode.window.showInformationMessage(`[MM43]   WAR exportado exitosamente a ${targetUri.fsPath}`);
                 } catch (error) {
                     Logger.error('GENERAL', `Error al exportar WAR: ${String(error)}`);
                     vscode.window.showErrorMessage(`[MM43] ❌ Error al copiar el archivo WAR: ${String(error)}`);
@@ -239,7 +242,7 @@ export async function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(
         vscode.commands.registerCommand('mm43.startWatcher', (name?: string) => {
             Logger.debug('DEBUG', `Comando mm43.startWatcher ejecutado${name ? ` para ${name}` : ''}`);
-            
+
             if (serverManager.getServerState() !== 'running') {
                 vscode.window.showErrorMessage('[MM43] El Watcher solo puede encenderse si el servidor está en ejecución.');
                 return;
@@ -386,7 +389,7 @@ export async function activate(context: vscode.ExtensionContext) {
             await config.update('serverPath', serverPath, vscode.ConfigurationTarget.Workspace);
             await config.update('serverDomain', domain, vscode.ConfigurationTarget.Workspace);
 
-            vscode.window.showInformationMessage(`✅ Servidor configurado correctamente en: ${serverPath}`);
+            vscode.window.showInformationMessage(`  Servidor configurado correctamente en: ${serverPath}`);
             serverProvider.refresh();
         }),
 
@@ -401,7 +404,7 @@ export async function activate(context: vscode.ExtensionContext) {
                 const config = vscode.workspace.getConfiguration('mm43');
                 await config.update('serverPath', undefined, vscode.ConfigurationTarget.Workspace);
                 await config.update('serverDomain', undefined, vscode.ConfigurationTarget.Workspace);
-                vscode.window.showInformationMessage('✅ Configuración de servidor eliminada.');
+                vscode.window.showInformationMessage('  Configuración de servidor eliminada.');
                 serverProvider.refresh();
             }
         })
@@ -627,7 +630,7 @@ export async function activate(context: vscode.ExtensionContext) {
                 Logger.debug('DEBUG', `Generando classpath para: ${project.name}`);
                 const classpath = await mavenManager.generarClasspath(project);
                 await ConfigManager.updateProjectClasspath(project.name, classpath);
-                vscode.window.showInformationMessage(`[MM43] ✅ Classpath generado y guardado para '${project.name}'`);
+                vscode.window.showInformationMessage(`[MM43]   Classpath generado y guardado para '${project.name}'`);
             } catch (err) {
                 Logger.error('MAVEN', `Error al generar classpath: ${String(err)}`);
                 vscode.window.showErrorMessage(`[MM43] ❌ Error al generar classpath: ${String(err)}`);
@@ -856,6 +859,7 @@ export async function activate(context: vscode.ExtensionContext) {
     // assetWatcher.startAll(); se eliminó la llamada redundante aquí
 
     await setupBeanIndex(context);
+    setupFacesIntellisense(context);
 
     const vcWorkspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
     if (vcWorkspaceRoot) {
@@ -912,6 +916,37 @@ export async function activate(context: vscode.ExtensionContext) {
     Logger.debug('DEBUG', 'Activación de MM43 completada.');
 }
 
+function setupFacesIntellisense(contexto:vscode.ExtensionContext): void {
+    const pathDeContexto = contexto.extensionPath;
+    
+    const registry = new NamespacerRegistry(pathDeContexto);
+    const proveedorDeAutocompletado = new XhtmlCompletionProvider(registry);
+    const proveedorDeHover = new XhtmlHoverProvider(registry);
+
+    // registros
+    const xhtmlSelector: vscode.DocumentSelector = [
+        { language: 'html', pattern: '**/*.xhtml' }
+    ]
+
+    contexto.subscriptions.push(
+        vscode.languages.registerCompletionItemProvider(xhtmlSelector, proveedorDeAutocompletado, ':')
+    )
+
+    contexto.subscriptions.push(
+        vscode.languages.registerHoverProvider(xhtmlSelector, proveedorDeHover)
+    )
+
+    //comando para limpiar cache
+    contexto.subscriptions.push(
+        vscode.commands.registerCommand('mm43.xhtml.clearCache', () => {
+            registry.limpiarCache();
+            Logger.info('XHTML', 'Caché limpiada');
+        })
+    )
+    Logger.info('XHTML', 'Faces Intellisense cargado.');
+    
+}
+
 export async function setupVersionControl(
     context: vscode.ExtensionContext,
     workspaceRoot: string
@@ -944,14 +979,14 @@ export async function setupVersionControl(
         { dispose: () => engine.dispose() }
     );
 
-    Logger.info('VERSION_CONTROL', '✅ Módulo de Control de Versión MM43 activo');
+    Logger.info('VERSION_CONTROL', '  Módulo de Control de Versión MM43 activo');
 }
 
 async function setupBeanIndex(context: vscode.ExtensionContext): Promise<void> {
     const projects = ConfigManager.getProjects();
 
     const registry = new BeanRegistry();
-    const scanner  = new BeanScanner(registry);
+    const scanner = new BeanScanner(registry);
 
     scanner.scanAll(projects).catch(err =>
         Logger.error('AI', `Error en scan inicial: ${String(err)}`)
@@ -992,7 +1027,8 @@ async function setupBeanIndex(context: vscode.ExtensionContext): Promise<void> {
 
 export function deactivate() {
     Logger.debug('DEBUG', 'Desactivando extensión MM43...');
-    if (globalServerManager) {
-        globalServerManager.stopSync();
-    }
+    // if (globalServerManager) {
+    //     globalServerManager.stopSync();
+
+
 }

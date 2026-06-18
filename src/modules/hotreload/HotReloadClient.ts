@@ -42,7 +42,7 @@ export class HotReloadClient {
 
                 const line = responseData.trim();
                 if (line.startsWith('OK|')) {
-                    Logger.info('HOTRELOAD', `✅ Agente confirmó redefinición: ${className}`);
+                    Logger.info('HOTRELOAD', `  Agente confirmó redefinición: ${className}`);
                     resolve(true);
                 } else if (line.startsWith('ERROR|')) {
                     const parts = line.split('|');

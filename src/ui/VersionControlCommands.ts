@@ -53,7 +53,7 @@ export function registerVersionControlCommands(
             try {
                 await engine.startFeature(featureId.trim(), featureName.trim() || featureId.trim());
                 vscode.window.showInformationMessage(
-                    `✅ Feature '${featureId}' iniciada. refs/features/${featureId}/ creados.`
+                    `  Feature '${featureId}' iniciada. refs/features/${featureId}/ creados.`
                 );
                 provider.refresh();
             } catch (err) {
@@ -102,7 +102,7 @@ export function registerVersionControlCommands(
                 );
 
                 vscode.window.showInformationMessage(
-                    `✅ Commit realizado con Vector de Versión MM43${featureId ? ` (Feature: ${featureId})` : ''}`
+                    `  Commit realizado con Vector de Versión MM43${featureId ? ` (Feature: ${featureId})` : ''}`
                 );
                 provider.refresh();
             } catch (err) {
@@ -176,7 +176,7 @@ export function registerVersionControlCommands(
                         await engine.sanitizeFeatures();
                     }
                 );
-                vscode.window.showInformationMessage('✅ Topología saneada y sincronizada.');
+                vscode.window.showInformationMessage('  Topología saneada y sincronizada.');
                 provider.refresh();
             } catch (err) {
                 vscode.window.showErrorMessage(`Error al sanear: ${(err as Error).message}`);
@@ -207,14 +207,14 @@ export function registerVersionControlCommands(
             const id = featureId ?? state?.currentFeature?.id;
             if (!id) return;
             await engine.closeFeature(id);
-            vscode.window.showInformationMessage(`✅ Feature '${id}' cerrada.`);
+            vscode.window.showInformationMessage(`  Feature '${id}' cerrada.`);
         }),
 
         vscode.commands.registerCommand('mm43.vc.openFeature', async (featureId?: string) => {
             const id = featureId ?? await promptFeatureSelection(engine);
             if (!id) return;
             await engine.openFeature(id);
-            vscode.window.showInformationMessage(`✅ Feature '${id}' reabierta.`);
+            vscode.window.showInformationMessage(`  Feature '${id}' reabierta.`);
         }),
 
         vscode.commands.registerCommand('mm43.vc.deleteFeature', async (featureId?: string) => {
@@ -230,7 +230,7 @@ export function registerVersionControlCommands(
             if (confirm !== 'Eliminar') return;
 
             await engine.deleteFeature(id);
-            vscode.window.showInformationMessage(`✅ Feature '${id}' eliminada.`);
+            vscode.window.showInformationMessage(`  Feature '${id}' eliminada.`);
         }),
 
         vscode.commands.registerCommand('mm43.vc.assignCommit', async (args: { sha: string, featureId?: string }) => {
@@ -242,7 +242,7 @@ export function registerVersionControlCommands(
 
             try {
                 await engine.assignCommitToFeature(args.sha, featureId);
-                vscode.window.showInformationMessage(`✅ Commit ${args.sha.substring(0, 8)} asignado a '${featureId}'.`);
+                vscode.window.showInformationMessage(`  Commit ${args.sha.substring(0, 8)} asignado a '${featureId}'.`);
             } catch (err) {
                 vscode.window.showErrorMessage(`Error al asignar commit: ${(err as Error).message}`);
             }
@@ -251,7 +251,7 @@ export function registerVersionControlCommands(
         vscode.commands.registerCommand('mm43.vc.unassignCommit', async (sha: string) => {
             try {
                 await engine.unassignCommit(sha);
-                vscode.window.showInformationMessage(`✅ Commit ${sha.substring(0, 8)} desvinculado.`);
+                vscode.window.showInformationMessage(`  Commit ${sha.substring(0, 8)} desvinculado.`);
             } catch (err) {
                 vscode.window.showErrorMessage(`Error al desvincular: ${(err as Error).message}`);
             }
@@ -265,7 +265,7 @@ export function registerVersionControlCommands(
                         await engine.syncUp();
                     }
                 );
-                vscode.window.showInformationMessage('✅ Cambios subidos correctamente.');
+                vscode.window.showInformationMessage('  Cambios subidos correctamente.');
             } catch (err) {
                 vscode.window.showErrorMessage(`Error al subir: ${(err as Error).message}`);
             }
@@ -279,7 +279,7 @@ export function registerVersionControlCommands(
                         await engine.syncDown();
                     }
                 );
-                vscode.window.showInformationMessage('✅ Cambios bajados correctamente.');
+                vscode.window.showInformationMessage('  Cambios bajados correctamente.');
             } catch (err) {
                 vscode.window.showErrorMessage(`Error al bajar: ${(err as Error).message}`);
             }
@@ -293,7 +293,7 @@ export function registerVersionControlCommands(
                         await engine.fullSync();
                     }
                 );
-                vscode.window.showInformationMessage('✅ Sincronización Total completada (Cero Conflictos).');
+                vscode.window.showInformationMessage('  Sincronización Total completada (Cero Conflictos).');
             } catch (err) {
                 vscode.window.showErrorMessage(`Error en sincronización total: ${(err as Error).message}`);
             }
@@ -346,7 +346,7 @@ async function executeFlatten(
 
         if (result.success) {
             vscode.window.showInformationMessage(
-                `✅ ${result.message}`,
+                `  ${result.message}`,
                 'OK'
             );
         } else {

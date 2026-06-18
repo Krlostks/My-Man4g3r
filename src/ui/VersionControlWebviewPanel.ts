@@ -642,7 +642,7 @@ ${s.isRebasing ? `
     <div class="section-body">
       ${s.pendingConflicts.length === 0 ? `
       <div class="empty-state">
-        <div class="empty-icon">✅</div>
+        <div class="empty-icon"> </div>
         Sin conflictos detectados. La topología es consistente.
       </div>` : conflictCards}
     </div>

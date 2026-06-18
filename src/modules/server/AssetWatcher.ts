@@ -30,17 +30,17 @@ export class AssetWatcher {
             }
 
             const filename = document.fileName;
-            
+
             // Ignorar archivos temporales, auto-guardados o irrelevantes
             if (filename.endsWith('.swp') || filename.endsWith('~') || path.basename(filename).startsWith('.')) {
                 return;
             }
 
             const projects = ConfigManager.getProjects();
-            
+
             // Buscar si el archivo pertenece a algún proyecto configurado
             const project = projects.find(p => filename.toLowerCase().startsWith(p.rootPath.toLowerCase()));
-            
+
             if (!project) { return; }
 
             const webappSrc = path.join(project.rootPath, 'src', 'main', 'webapp');
@@ -50,7 +50,7 @@ export class AssetWatcher {
             if (filename.toLowerCase().startsWith(webappSrc.toLowerCase())) {
                 const relativeFilename = path.relative(webappSrc, filename);
                 this.syncFile(project, webappSrc, relativeFilename);
-            } 
+            }
             // Verificar si es un cambio en código Java (dentro del src/main/java)
             else if (filename.toLowerCase().startsWith(webappSrcJava.toLowerCase()) && filename.endsWith('.java')) {
                 AgenteHotReloadManager.cambioEnCaliente(filename, project);
@@ -92,7 +92,7 @@ export class AssetWatcher {
         const destFile = path.join(targetExploded, relativeFilename);
 
         try {
-            if (!fs.existsSync(srcFile)) { return; } 
+            if (!fs.existsSync(srcFile)) { return; }
 
             const stats = fs.lstatSync(srcFile);
             if (!stats.isFile()) { return; }
@@ -103,12 +103,12 @@ export class AssetWatcher {
             }
 
             fs.copyFileSync(srcFile, destFile);
-            
+
             const now = new Date();
             fs.utimesSync(destFile, now, now);
 
             Logger.info('WATCHER', `${project.name} | Sync (Guardado): ${relativeFilename} -> ${destFile}`);
-            vscode.window.setStatusBarMessage(`✅ Sync: ${path.basename(relativeFilename)}`, 3000);
+            vscode.window.setStatusBarMessage(`  Sync: ${path.basename(relativeFilename)}`, 3000);
         } catch (err) {
             Logger.error('WATCHER', `${project.name} | ERROR copiando ${relativeFilename}: ${err}`);
         }

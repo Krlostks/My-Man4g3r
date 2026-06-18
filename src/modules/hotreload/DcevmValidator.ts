@@ -75,7 +75,7 @@ export class DcevmValidator {
 
             const isDcevm = this.containsDcevmSignature(output);
 
-            Logger.info('HOTRELOAD', `Verificación DCEVM — resultado: ${isDcevm ? 'DCEVM Detectado ✅' : 'JVM Estándar ⚠️'}`);
+            Logger.info('HOTRELOAD', `Verificación DCEVM — resultado: ${isDcevm ? 'DCEVM Detectado  ' : 'JVM Estándar ⚠️'}`);
             Logger.info('HOTRELOAD', `java -version output: ${output.trim()}`);
             return { isDcevm, javaHome, versionOutput: output };
         } catch (err: any) {
@@ -85,7 +85,7 @@ export class DcevmValidator {
             const combined = stderr + stdout;
             const isDcevm = this.containsDcevmSignature(combined);
 
-            Logger.info('HOTRELOAD', `Verificación DCEVM (fallback) — resultado: ${isDcevm ? 'DCEVM Detectado ✅' : 'JVM Estándar ⚠️'}`);
+            Logger.info('HOTRELOAD', `Verificación DCEVM (fallback) — resultado: ${isDcevm ? 'DCEVM Detectado  ' : 'JVM Estándar ⚠️'}`);
             Logger.info('HOTRELOAD', `java -version output (fallback): ${combined.trim()}`);
             return { isDcevm, javaHome, versionOutput: combined };
         }
@@ -97,8 +97,8 @@ export class DcevmValidator {
     private static containsDcevmSignature(output: string): boolean {
         const lower = output.toLowerCase();
         return lower.includes('dcevm') ||
-               lower.includes('dynamic code evolution') ||
-               lower.includes('trava');
+            lower.includes('dynamic code evolution') ||
+            lower.includes('trava');
     }
 
     /**

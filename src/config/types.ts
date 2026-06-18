@@ -172,3 +172,22 @@ export interface AgentConfig {
 export type WatcherState = 'stopped' | 'running' | 'error';
 
 export type ServerState = 'stopped' | 'running' | 'starting' | 'stopping' | 'unknown';
+
+
+
+// Tipos para primefaces y omnifaces
+
+export interface Attribute {
+    readonly name: string;
+    readonly type: string;
+    readonly description: string;
+    readonly required: boolean;
+}
+
+export interface Component {
+    readonly name: string;
+    readonly description: string;
+    readonly attributes: Attribute[];
+}
+
+export type FrameworkMetadataCollection = Record<string, Component>;

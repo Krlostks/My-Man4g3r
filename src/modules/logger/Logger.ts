@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { LogWebviewProvider } from './LogWebviewProvider';
 
-export type LogCategory = 'SERVER' | 'MAVEN' | 'WATCHER' | 'CACHE' | 'HOTRELOAD' | 'GENERAL' | 'VERSION_CONTROL' | 'GIT' | 'DATABASE' | 'AI' | 'DEBUG';
+export type LogCategory = 'SERVER' | 'MAVEN' | 'WATCHER' | 'CACHE' | 'HOTRELOAD' | 'GENERAL' | 'VERSION_CONTROL' | 'GIT' | 'DATABASE' | 'AI' | 'DEBUG' | 'XHTML';
 
 type LogLevel = 'INFO' | 'WARN' | 'ERROR' | 'DEBUG';
 
@@ -17,6 +17,7 @@ const CATEGORY_ICONS: Record<LogCategory, string> = {
     DATABASE: '',
     AI: '',
     DEBUG: '',
+    XHTML: '',
 };
 
 export class Logger {
