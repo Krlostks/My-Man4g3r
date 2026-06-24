@@ -3,7 +3,7 @@
   "publisher": "KrlosTKS",
   "displayName": "My M4nag3r",
   "description": "E ",
-  "version": "0.2.2",
+  "version": "0.2.4",
   "files": [
     "dist/**",
     "src/**/*.ts",

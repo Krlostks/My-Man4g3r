@@ -2,23 +2,30 @@ import * as net from 'net';
 import { ConfigManager } from '../../config/ConfigManager';
 import { Logger } from '../logger/Logger';
 
-/**
- * Cliente TCP para comunicarse con el HotReloadAgent.
- * 
- * Protocolo de envío:    NombreCompletoDeLaClase|RutaAbsolutaAlArchivoClass\n
- * Protocolo de respuesta: OK|NombreClase\n   o   ERROR|NombreClase|mensaje\n
- */
+
 export class HotReloadClient {
 
-    /**
-     * Envía una petición de recarga al agente y espera la respuesta.
-     * @param className Nombre completo de la clase (ej: com.miapp.controllers.MiControlador)
-     * @param classFilePath Ruta absoluta al archivo .class compilado
-     * @returns Promise que resuelve con true si la redefinición fue exitosa
-     */
+
     static async sendReload(className: string, classFilePath: string): Promise<boolean> {
+        console.log("className es: " + className + " y filepath es:" + classFilePath);
+        // Validacion de entrada: evitar romper el protocolo basado en '|'
+        if (!className || !className.trim()) {
+
+            Logger.error('HOTRELOAD', 'sendReload: className vacio');
+            return false;
+        }
+        if (!classFilePath || !classFilePath.trim()) {
+            Logger.error('HOTRELOAD', 'sendReload: classFilePath vacio');
+            return false;
+        }
+        if (className.includes('|') || classFilePath.includes('|') ||
+            className.includes('\n') || classFilePath.includes('\n')) {
+            Logger.error('HOTRELOAD', `sendReload: caracteres invalidos en parametros (${className})`);
+            return false;
+        }
+
         const port = ConfigManager.getHotReloadPort();
-        const message = `${className}|${classFilePath}`;
+        const message = `REDEFINE|${className}|${classFilePath}`;
 
         return new Promise((resolve) => {
             const socket = new net.Socket();
@@ -29,7 +36,7 @@ export class HotReloadClient {
 
             socket.connect(port, '127.0.0.1', () => {
                 Logger.info('HOTRELOAD', `⚡ Enviando recarga: ${className}`);
-                socket.write(message + '\n');
+                socket.end(message + '\n');
             });
 
             socket.on('data', (data) => {
@@ -47,12 +54,13 @@ export class HotReloadClient {
                 } else if (line.startsWith('ERROR|')) {
                     const parts = line.split('|');
                     const errorMsg = parts.length >= 3 ? parts.slice(2).join('|') : 'Error desconocido';
-                    Logger.error('HOTRELOAD', `❌ Agente rechazó ${className}: ${errorMsg}`);
+                    Logger.error('HOTRELOAD', ` Agente rechazó ${className}: ${errorMsg}`);
                     resolve(false);
-                } else {
-                    // Respuesta no reconocida — asumir éxito (compatibilidad con agente viejo)
-                    Logger.debug('DEBUG', `Respuesta no reconocida del agente: "${line}". Asumiendo éxito.`);
+                } else if (line.length === 0) {
                     resolve(true);
+                } else {
+                    Logger.debug('DEBUG', `Respuesta no reconocida del agente: "${line}". Asumiendo éxito.`);
+                    resolve(false);
                 }
             });
 
@@ -70,6 +78,7 @@ export class HotReloadClient {
                 if (!resolved) {
                     resolved = true;
                     Logger.error('HOTRELOAD', `Error al conectar con el agente (puerto ${port}): ${err.message}`);
+                    socket.destroy();
                     resolve(false);
                 }
             });
@@ -93,20 +102,26 @@ export class HotReloadClient {
 
         return new Promise((resolve) => {
             const socket = new net.Socket();
+            let resolved = false;
             socket.setTimeout(2000);
 
-            socket.connect(port, '127.0.0.1', () => {
+            const finish = (alive: boolean) => {
+                if (resolved) { return; }
+                resolved = true;
                 socket.destroy();
-                resolve(true);
+                resolve(alive);
+            };
+
+            socket.connect(port, '127.0.0.1', () => {
+                finish(true);
             });
 
             socket.on('error', () => {
-                resolve(false);
+                finish(false);
             });
 
             socket.on('timeout', () => {
-                socket.destroy();
-                resolve(false);
+                finish(false);
             });
         });
     }
