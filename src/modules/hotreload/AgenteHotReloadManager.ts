@@ -691,7 +691,7 @@ public class MM43CompilerServer {
             // evitar problemas de escape de '\\' dentro de las comillas del argfile.
             const toSlash = (p: string) => p.replace(/\\/g, '/');
             const argFile = path.join(tempDir, `argfile_${Date.now()}.txt`);
-            const argContent = `-encoding UTF-8\n-cp "${toSlash(fullClasspath)}"\n-d "${toSlash(outputDir)}"\n"${toSlash(javaFile)}"\n`;
+            const argContent = `-encoding UTF-8\n-g\n-parameters\n-cp "${toSlash(fullClasspath)}"\n-d "${toSlash(outputDir)}"\n"${toSlash(javaFile)}"\n`;
 
             try {
                 fs.writeFileSync(argFile, argContent, 'utf8');
