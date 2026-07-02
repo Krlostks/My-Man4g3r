@@ -66,6 +66,7 @@ export class AgenteHotReloadManager {
     private static THRESHOLD = 50;    
     private static isPaused: boolean = false;
     private static lastHashes: Map<string, string> = new Map();
+    private static activeStatusMessages: Map<string, vscode.Disposable> = new Map();
 
     constructor() { }
 
@@ -98,6 +99,8 @@ export class AgenteHotReloadManager {
             Logger.error('HOTRELOAD', `Error calculando hash para ${filename}: ${e}`);
         }
 
+        this.mostrarSpinner(javaAbsPath);
+
         this.changeQueue.push({ filename, project });        
         if (this.processTimer) { clearTimeout(this.processTimer); }
 
@@ -123,9 +126,17 @@ export class AgenteHotReloadManager {
             );
 
             if (choice === 'Redeploy Completo') {
+                queue.forEach(item => {
+                    const javaAbsPath = path.isAbsolute(item.filename) ? item.filename : path.join(item.project.rootPath, 'src', 'main', 'java', item.filename);
+                    this.removerSpinner(javaAbsPath);
+                });
                 vscode.commands.executeCommand('mm43.restartServer');
                 return;
             } else if (!choice) {
+                queue.forEach(item => {
+                    const javaAbsPath = path.isAbsolute(item.filename) ? item.filename : path.join(item.project.rootPath, 'src', 'main', 'java', item.filename);
+                    this.removerSpinner(javaAbsPath);
+                });
                 return;
             }
         }
@@ -228,11 +239,15 @@ export class AgenteHotReloadManager {
             } else {
                 Logger.error('HOTRELOAD', `Falló tras ${MAX_RETRIES} intentos: ${job.javaFile}`);
                 job.resolve(false);
+                const basename = path.basename(job.javaFile, '.java');
+                this.removerSpinner(job.javaFile, `Hotswap ❌ : ${basename}`, 3000);
             }
 
         } catch (error) {
             Logger.error('HOTRELOAD', `Error en job ${job.id}: ${error}`);
             job.reject(error as Error);
+            const basename = path.basename(job.javaFile, '.java');
+            this.removerSpinner(job.javaFile, `Hotswap ❌ : ${basename}`, 3000);
         }
     }
 
@@ -668,13 +683,29 @@ public class MM43CompilerServer {
 
         return new Promise((resolve) => {
             const { exec } = require('child_process');
-            const cmd = `"${jdkPath}" -encoding UTF-8 -cp "${fullClasspath}" -d "${outputDir}" "${javaFile}"`;            
+            const tempDir = path.join(project.rootPath, 'target', 'temp');
+            if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
             
-            exec(cmd, { timeout: 30000 }, (error: any, stdout: string, stderr: string) => {
+            // Classpath puede superar el limite de linea de comandos de Windows (~8191 chars).
+            // Se usa un argfile (@archivo) soportado por javac desde JDK8. Se usan '/' para
+            // evitar problemas de escape de '\\' dentro de las comillas del argfile.
+            const toSlash = (p: string) => p.replace(/\\/g, '/');
+            const argFile = path.join(tempDir, `argfile_${Date.now()}.txt`);
+            const argContent = `-encoding UTF-8\n-cp "${toSlash(fullClasspath)}"\n-d "${toSlash(outputDir)}"\n"${toSlash(javaFile)}"\n`;
+
+            try {
+                fs.writeFileSync(argFile, argContent, 'utf8');
+                const cmd = `"${jdkPath}" @"${argFile}"`;
+
+                exec(cmd, { timeout: 30000 }, (error: any, stdout: string, stderr: string) => {
+                try { fs.unlinkSync(argFile); } catch {}
                 if (error) {
+                    console.log("el error es :" + error.message);
+                    console.log("el stderr es :" + stderr);
+                    console.log("el stdout es :" + stdout);
+                    
                     if (stderr.includes('cannot find symbol')) {
-                        Logger.debug('DEBUG', 'Símbolo no encontrado, reintentando...');
-                        Logger.debug('HOTRELOAD', `javac error: ${stderr}`);
+                        Logger.debug('DEBUG', 'Símbolo no encontrado, reintentando...');                        
                         setTimeout(() => resolve(true), 500);
                     } else {
                         Logger.error('HOTRELOAD', `javac error: ${stderr}`);
@@ -684,6 +715,31 @@ public class MM43CompilerServer {
                     resolve(true);
                 }
             });
+            } catch (error) {
+                try { fs.unlinkSync(argFile); } catch {}
+                resolve(false);
+                console.log("error");
+                
+            }
+            // const cmd = `"${jdkPath}" -encoding UTF-8 -cp "${fullClasspath}" -d "${outputDir}" "${javaFile}"`;            
+            
+            // exec(cmd, { timeout: 30000 }, (error: any, stdout: string, stderr: string) => {
+            //     if (error) {
+            //         console.log("el error es :" + error.message);
+            //         console.log("el stderr es :" + stderr);
+            //         console.log("el stdout es :" + stdout);
+                    
+            //         if (stderr.includes('cannot find symbol')) {
+            //             Logger.debug('DEBUG', 'Símbolo no encontrado, reintentando...');                        
+            //             setTimeout(() => resolve(true), 500);
+            //         } else {
+            //             Logger.error('HOTRELOAD', `javac error: ${stderr}`);
+            //             resolve(false);
+            //         }
+            //     } else {
+            //         resolve(true);
+            //     }
+            // });
         });
     }
 
@@ -781,7 +837,7 @@ public class MM43CompilerServer {
 
         return new Promise((resolve) => {
             if (hasMaven) {
-                const cmd = `cd "${project.rootPath}" && mvn compile -DskipTests`;
+                const cmd = `cd "${project.rootPath}" && mvnd compile -DskipTests`;
                 exec(cmd, { timeout: 180000 }, (error: any, stdout: string, stderr: string) => {
                     if (error) {
                         Logger.error('HOTRELOAD', `Maven failed: ${stderr || stdout}`);
@@ -806,6 +862,7 @@ public class MM43CompilerServer {
         const agentMode = ConfigManager.getAgentMode();
         if (!agentMode || agentMode === 'none') {
             Logger.debug('DEBUG', 'Hotswap omitido: agente no configurado');
+            this.removerSpinner(javaFile);
             return;
         }
 
@@ -821,24 +878,47 @@ public class MM43CompilerServer {
 
         if (!fs.existsSync(classFile)) {
             Logger.debug('DEBUG', `.class no encontrado: ${classFile}`);
+            const basename = path.basename(javaFile, '.java');
+            this.removerSpinner(javaFile, `Hotswap ❌ : ${basename}`, 3000);
             return;
         }        
         const fileName = javaFile.substring(javaFile.lastIndexOf('\\') + 1);
-        const statusMessage = vscode.window.setStatusBarMessage(`$(sync~spin) Hotswap: ${path.basename(fileName, '.java')}...`);
 
         let success = false;
         try {
             success = await HotReloadClient.sendReload(className, classFile);
-        } finally {
-            statusMessage.dispose();
+        } catch (e) {
+            Logger.error('HOTRELOAD', `Error enviando reload para ${fileName}: ${e}`);
         }
         
+        const basename = path.basename(javaFile, '.java');
         if (success) {
             Logger.info('HOTRELOAD', `clase recargada exitosamente: ${fileName}`);
-            vscode.window.setStatusBarMessage(`Hotswap ⚡ : ${path.basename(fileName, '.java')}`, 3000);
+            this.removerSpinner(javaFile, `Hotswap ⚡ : ${basename}`, 3000);
         } else {
             Logger.warn('HOTRELOAD', `HotSwap failed: ${fileName}`);
-            vscode.window.setStatusBarMessage(`Hotswap ❌ : ${path.basename(fileName, '.java')}`, 3000);
+            this.removerSpinner(javaFile, `Hotswap ❌ : ${basename}`, 3000);
+        }
+    }
+
+    private static mostrarSpinner(javaFile: string): void {
+        const basename = path.basename(javaFile, '.java');
+        const existing = this.activeStatusMessages.get(javaFile);
+        if (existing) {
+            existing.dispose();
+        }
+        const statusMsg = vscode.window.setStatusBarMessage(`$(sync~spin) Hotswap: ${basename}...`);
+        this.activeStatusMessages.set(javaFile, statusMsg);
+    }
+
+    private static removerSpinner(javaFile: string, finalMessage?: string, timeoutMs: number = 3000): void {
+        const existing = this.activeStatusMessages.get(javaFile);
+        if (existing) {
+            existing.dispose();
+            this.activeStatusMessages.delete(javaFile);
+        }
+        if (finalMessage) {
+            vscode.window.setStatusBarMessage(finalMessage, timeoutMs);
         }
     }
 

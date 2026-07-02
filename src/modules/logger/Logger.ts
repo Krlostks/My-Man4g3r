@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { LogWebviewProvider } from './LogWebviewProvider';
 
-export type LogCategory = 'SERVER' | 'MAVEN' | 'WATCHER' | 'CACHE' | 'HOTRELOAD' | 'GENERAL' | 'VERSION_CONTROL' | 'GIT' | 'DATABASE' | 'AI' | 'DEBUG' | 'XHTML';
+export type LogCategory = 'SERVER' | 'MAVEN' | 'WATCHER' | 'CACHE' | 'HOTRELOAD' | 'GENERAL' | 'VERSION_CONTROL' | 'GIT' | 'DATABASE' | 'AI' | 'DEBUG' | 'XHTML' | 'SERVER_LOGS';
 
 type LogLevel = 'INFO' | 'WARN' | 'ERROR' | 'DEBUG';
 
@@ -18,16 +18,20 @@ const CATEGORY_ICONS: Record<LogCategory, string> = {
     AI: '',
     DEBUG: '',
     XHTML: '',
+    SERVER_LOGS: '',
 };
 
 export class Logger {
 
     private static channel: vscode.OutputChannel;
+    private static serverChannel: vscode.OutputChannel;
     private static webview: LogWebviewProvider | undefined;
 
     static init(context: vscode.ExtensionContext): void {
         Logger.channel = vscode.window.createOutputChannel('mm43');
+        Logger.serverChannel = vscode.window.createOutputChannel('mm43-server');
         context.subscriptions.push(Logger.channel);
+        context.subscriptions.push(Logger.serverChannel);
     }
 
     static setWebview(provider: LogWebviewProvider): void {
@@ -61,42 +65,33 @@ export class Logger {
         const clean = Logger.sanitize(text);
         if (!clean.trim()) { return; }
         Logger.channel.append(clean);
-        const lines = clean.split('\n').filter(l => l.trim().length > 0);
-        if (lines.length > 0) {
-            Logger.webview?.addRawLines(lines);
-        }
     }
 
     static show(): void {
         Logger.channel.show(true);
     }
 
+    static showServerLogs(): void {
+        Logger.serverChannel.show(true);
+    }
+
     static getChannel(): vscode.OutputChannel {
         return Logger.channel;
     }
 
+    static getServerChannel(): vscode.OutputChannel {
+        return Logger.serverChannel;
+    }
+
     private static log(level: LogLevel, category: LogCategory, msg: string): void {
-        const ts = Logger.timestamp();
-        const icon = CATEGORY_ICONS[category];
         const clean = Logger.sanitize(msg);
-        const prefix = `[${ts}] ${icon} ${category}`;
-
-        let formatted: string;
-        switch (level) {
-            case 'WARN':
-                formatted = `${prefix}  ${clean}`;
-                break;
-            case 'ERROR':
-                formatted = `${prefix}  ${clean}`;
-                break;
-            case 'DEBUG':
-                formatted = `${prefix}  ${clean}`;
-                break;
-            default:
-                formatted = `${prefix}  ${clean}`;
+        
+        // Los logs del servidor van al canal específico para servidor
+        if (category === 'SERVER') {
+            Logger.serverChannel.appendLine(clean);
         }
-
-        Logger.channel.appendLine(formatted);
+        
+        // Todos los demás logs van al webview
         Logger.webview?.addEntry(level, category, clean);
     }
 
@@ -118,4 +113,3 @@ export class Logger {
         return s;
     }
 }
-

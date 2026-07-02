@@ -1039,7 +1039,7 @@ async function setupBeanIndex(context: vscode.ExtensionContext): Promise<BeanReg
 
 export function deactivate() {
     Logger.debug('DEBUG', 'Desactivando extensión MM43...');
-    // if (globalServerManager) {
-    //      globalServerManager.stop();
-    // }
+    if (globalServerManager) {
+          globalServerManager.stop();
+    }
 }  

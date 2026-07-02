@@ -17,8 +17,6 @@ export class LogWebviewProvider implements vscode.WebviewViewProvider {
 
   private view: vscode.WebviewView | undefined;
   private entryCounter = 0;
-  private rawBuffer: string[] = [];
-  private rawFlushTimer: ReturnType<typeof setTimeout> | undefined;
 
   constructor(private readonly extensionUri: vscode.Uri) { }
 
@@ -38,12 +36,12 @@ export class LogWebviewProvider implements vscode.WebviewViewProvider {
 
     webviewView.webview.onDidReceiveMessage((msg) => {
       if (msg.type === 'clear') {
+        this.clearEntries();
       }
     });
   }
 
   addEntry(level: LogLevel, category: LogCategory, text: string): void {
-    this.flushRawBuffer();
     const lines = text.split('\n').filter(l => l.trim().length > 0);
     if (lines.length === 0) { return; }
 
@@ -58,30 +56,12 @@ export class LogWebviewProvider implements vscode.WebviewViewProvider {
     this.postEntry(entry);
   }
 
-  addRawLines(lines: string[]): void {
-    this.rawBuffer.push(...lines);
-
-    if (this.rawFlushTimer) { clearTimeout(this.rawFlushTimer); }
-    this.rawFlushTimer = setTimeout(() => this.flushRawBuffer(), 300);
-  }
-
-  private flushRawBuffer(): void {
-    if (this.rawBuffer.length === 0) { return; }
-
-    const entry: LogEntry = {
-      id: ++this.entryCounter,
-      level: 'INFO',
-      category: 'GENERAL',
-      lines: [...this.rawBuffer],
-      timestamp: this.now(),
-    };
-    this.rawBuffer = [];
-    if (this.rawFlushTimer) { clearTimeout(this.rawFlushTimer); this.rawFlushTimer = undefined; }
-    this.postEntry(entry);
-  }
-
   private postEntry(entry: LogEntry): void {
     this.view?.webview.postMessage({ type: 'addEntry', entry });
+  }
+
+  private clearEntries(): void {
+    this.entryCounter = 0;
   }
 
   private now(): string {
@@ -106,6 +86,15 @@ export class LogWebviewProvider implements vscode.WebviewViewProvider {
     --badge-info: #3794ff;
     --badge-warn: #cca700;
     --badge-error: #f14c4c;
+    --badge-debug: #888;
+    --text-info: #4da6ff;
+    --text-warn: #e0b636;
+    --text-error: #f48080;
+    --text-debug: #999;
+    --border-info: #3794ff;
+    --border-warn: #cca700;
+    --border-error: #f14c4c;
+    --border-debug: #666;
     --hover: var(--vscode-list-hoverBackground, #2a2d2e);
     --font: var(--vscode-editor-font-family, 'Cascadia Code', 'Consolas', monospace);
     --font-size: 12px;
@@ -161,10 +150,15 @@ export class LogWebviewProvider implements vscode.WebviewViewProvider {
 
   .log-entry {
     border-bottom: 1px solid var(--border);
-    padding: 6px 10px;
+    padding: 6px 10px 6px 12px;
     transition: background .1s;
+    border-left: 3px solid transparent;
   }
   .log-entry:hover { background: var(--hover); }
+  .log-entry.level-INFO  { border-left-color: var(--border-info); }
+  .log-entry.level-WARN  { border-left-color: var(--border-warn); }
+  .log-entry.level-ERROR { border-left-color: var(--border-error); }
+  .log-entry.level-DEBUG { border-left-color: var(--border-debug); }
 
   .log-header {
     display: flex;
@@ -185,6 +179,7 @@ export class LogWebviewProvider implements vscode.WebviewViewProvider {
   .log-badge.INFO  { background: var(--badge-info); }
   .log-badge.WARN  { background: var(--badge-warn); color: #000; }
   .log-badge.ERROR { background: var(--badge-error); }
+  .log-badge.DEBUG { background: var(--badge-debug); }
 
   .log-category {
     font-size: 10px;
@@ -203,10 +198,12 @@ export class LogWebviewProvider implements vscode.WebviewViewProvider {
     line-height: 1.5;
     white-space: pre-wrap;
     word-break: break-word;
-    color: var(--fg);
-    opacity: .9;
     margin-top: 2px;
   }
+  .log-body.level-INFO  { color: var(--text-info); }
+  .log-body.level-WARN  { color: var(--text-warn); }
+  .log-body.level-ERROR { color: var(--text-error); }
+  .log-body.level-DEBUG { color: var(--text-debug); }
 
   .log-body.collapsed .log-line:nth-child(n+4) {
     display: none;
@@ -283,7 +280,7 @@ export class LogWebviewProvider implements vscode.WebviewViewProvider {
     emptyMsg.style.display = 'none';
 
     const el = document.createElement('div');
-    el.className = 'log-entry';
+    el.className = 'log-entry level-' + entry.level;
     el.dataset.id = entry.id;
 
     const totalLines = entry.lines.length;
@@ -296,8 +293,8 @@ export class LogWebviewProvider implements vscode.WebviewViewProvider {
     html += '<span class="log-time">' + entry.timestamp + '</span>';
     html += '</div>';
 
-    // Body
-    html += '<div class="log-body' + (needsCollapse ? ' collapsed' : '') + '" data-entry-id="' + entry.id + '">';
+    // Body with level-based color
+    html += '<div class="log-body level-' + entry.level + (needsCollapse ? ' collapsed' : '') + '" data-entry-id="' + entry.id + '">';
     for (let i = 0; i < totalLines; i++) {
       html += '<span class="log-line">' + escapeHtml(entry.lines[i]) + '</span>';
     }

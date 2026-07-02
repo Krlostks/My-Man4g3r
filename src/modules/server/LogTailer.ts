@@ -80,11 +80,38 @@ export class LogTailer {
                 });
                 stream.on('data', (chunk: any) => {
                     const content = chunk.toString();
-                    Logger.raw(content);
+                    this.processServerLogs(content);
                 });
                 this.fileSize = newSize;
             }
         } catch {
+        }
+    }
+
+    private processServerLogs(content: string): void {
+        // Dividir el contenido en líneas
+        const lines = content.split('\n');
+
+        for (const line of lines) {
+            // Buscar patrón de logs del servidor con formato:
+            // [Payara 5.2022.5] [INFORMACIN] [NCLS-CORE-00101] [javax.enterprise.system.core] [...] [[
+            // ... texto entre corchetes duplicados ...
+            // ]]
+
+            const match = line.match(/\[\[([\s\S]*?)\]\]/);
+            if (match && match[1]) {
+                // Extraer solo el texto entre los corchetes duplicados
+                const message = match[1].trim();
+                if (message) {
+                    // Enviar a canal de logs del servidor (no al webview)
+                    Logger.info('SERVER', message);
+                }
+            } else {
+                // Si no cumple el patrón, enviar toda la línea al canal general
+                if (line.trim()) {
+                    Logger.raw(line + '\n');
+                }
+            }
         }
     }
 
@@ -93,7 +120,8 @@ export class LogTailer {
             const content = fs.readFileSync(logFile, 'utf-8');
             const allLines = content.split('\n');
             const tail = allLines.slice(-lines).filter(l => l.trim().length > 0);
-            Logger.raw(tail.join('\n') + '\n');
+            // Procesar las últimas 100 líneas
+            this.processServerLogs(tail.join('\n'));
         } catch {
         }
     }
@@ -102,3 +130,4 @@ export class LogTailer {
         this.stop();
     }
 }
+
