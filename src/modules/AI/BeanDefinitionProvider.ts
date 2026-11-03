@@ -58,13 +58,13 @@ export class BeanDefinitionProvider implements vscode.DefinitionProvider {
 
         const targetSeg = targetRef.segments[targetSegIdx];
         const textBefore = fullText.substring(0, targetSeg.start);
-        const scopeVars = this.scopeResolver.resolveScopeVariables(textBefore);
+        const scopeVars = this.scopeResolver.resolveScopeVariables(textBefore, fullText, targetSeg.start);
 
         // Si es el primer segmento (raíz)
         if (targetSegIdx === 0) {
             // Variable de scope: si se declaró en este archivo, ubicar la declaración var="..."
             if (scopeVars.has(targetSeg.name)) {
-                const varDeclMatch = new RegExp(`\\bvar\\s*=\\s*["']${targetSeg.name}["']`).exec(textBefore);
+                const varDeclMatch = new RegExp(`\\bvar\\s*=\\s*["']${targetSeg.name}["']`).exec(fullText);
                 if (varDeclMatch) {
                     return new vscode.Location(
                         document.uri,

@@ -80,5 +80,29 @@ suite('Faces Intellisense & EL Test Suite', () => {
         assert.ok(scopes.has('usuarioActual'));
         assert.ok(scopes.has('item'));
     });
+
+    test('ScopeResolver: detecta variables en f:selectItems dentro de p:selectOneMenu', () => {
+        const beanRegistry = new BeanRegistry();
+        const classIndex = new JavaClassIndex(beanRegistry);
+        const scopeResolver = new ScopeResolver(classIndex);
+
+        const xhtmlFragment = `
+            <p:dataTable var="obj" value="#{infraccionesController.view.articulosFiltrados}">
+                <p:column>
+                    <p:selectOneMenu value="#{obj.tabuladorSeleccionado}">
+                        <f:selectItems value="#{infraccionesController.view.listTabuladores}" var="tabulador"
+                                itemLabel="#{tabulador.dsarticulo}" itemValue="#{tabulador}"/>
+                    </p:selectOneMenu>
+                </p:column>
+            </p:dataTable>
+        `;
+
+        const targetPos = xhtmlFragment.indexOf('tabulador.dsarticulo');
+        const textBefore = xhtmlFragment.substring(0, targetPos);
+        const scopes = scopeResolver.resolveScopeVariables(textBefore, xhtmlFragment, targetPos);
+
+        assert.ok(scopes.has('obj'), 'Debe detectar var de p:dataTable');
+        assert.ok(scopes.has('tabulador'), 'Debe detectar var de f:selectItems');
+    });
 });
 

@@ -86,7 +86,9 @@ export class ElRenameProvider implements vscode.RenameProvider {
         let declaringClass: string | undefined;
         if (!isRootBean) {
             const chain = targetRef.segments.slice(0, targetSegIdx + 1).map((s) => s.name);
-            const resolved = this.classIndex.resolveChain(rootBeanName, chain);
+            const textBefore = fullText.substring(0, targetRef.segments[0].start);
+            const scopeVars = this.scopeResolver.resolveScopeVariables(textBefore, fullText, targetRef.segments[0].start);
+            const resolved = this.classIndex.resolveChain(rootBeanName, chain, scopeVars);
             declaringClass = resolved?.declaringClass;
         }
 

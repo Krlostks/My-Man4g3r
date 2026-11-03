@@ -43,7 +43,9 @@ export class ElCompletionProvider implements vscode.CompletionItemProvider {
             return null;
         }
 
-        const scopeVars = this.scopeResolver.resolveScopeVariables(textBefore);
+        const fullDoc = document.getText();
+        const offset = document.offsetAt(position);
+        const scopeVars = this.scopeResolver.resolveScopeVariables(textBefore, fullDoc, offset);
 
         if (ctx.kind === 'root') {
             return this.suggestRoots(ctx.partial, scopeVars);

@@ -43,7 +43,7 @@ export class ElHoverProvider implements vscode.HoverProvider {
             );
 
             const textBefore = fullText.substring(0, targetSeg.start);
-            const scopeVars = this.scopeResolver.resolveScopeVariables(textBefore);
+            const scopeVars = this.scopeResolver.resolveScopeVariables(textBefore, fullText, targetSeg.start);
 
             // Si es el primer segmento (raíz)
             if (segIdx === 0) {

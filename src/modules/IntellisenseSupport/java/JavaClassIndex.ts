@@ -181,8 +181,11 @@ export class JavaClassIndex {
             if (bean) {
                 currentClassName = bean.className;
             } else {
-                // Probar si pasaron el nombre de la clase directamente
-                currentClassName = this.cleanType(root);
+                // Probar si pasaron el nombre de la clase directamente (solo si existe en el registro)
+                const clean = this.cleanType(root);
+                if (this.beanRegistry.getClassFile(clean)) {
+                    currentClassName = clean;
+                }
             }
         }
 
@@ -263,7 +266,10 @@ export class JavaClassIndex {
      * Limpia un tipo Java de genéricos y arrays (ej. "List<Usuario>" → "Usuario", "String[]" → "String").
      */
     cleanType(rawType: string): string {
-        return this.unwrapGenericType(rawType);
+        const unwrapped = this.unwrapGenericType(rawType);
+        // Remover paquete si viene calificado (ej. com.sigaf.model.Tabulador -> Tabulador)
+        const simple = unwrapped.split('.').pop() || unwrapped;
+        return simple.trim();
     }
 
     /**

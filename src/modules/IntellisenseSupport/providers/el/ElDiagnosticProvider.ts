@@ -74,7 +74,7 @@ export class ElDiagnosticProvider implements vscode.Disposable {
             }
 
             const textBefore = text.substring(0, rootSeg.start);
-            const scopeVars = this.scopeResolver.resolveScopeVariables(textBefore);
+            const scopeVars = this.scopeResolver.resolveScopeVariables(textBefore, text, rootSeg.start);
 
             // Ignorar variables de ámbito (var="item", ui:param...)
             if (scopeVars.has(rootName)) {
