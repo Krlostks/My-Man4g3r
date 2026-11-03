@@ -68,6 +68,11 @@ export class AgenteHotReloadManager {
     private static lastHashes: Map<string, string> = new Map();
     private static activeStatusMessages: Map<string, vscode.Disposable> = new Map();
 
+    // ── Estado expuesto a la UI (indicador de cola / conexion Hot-Reload) ──
+    private static queueChangeEmitter = new vscode.EventEmitter<void>();
+    static readonly onQueueChange: vscode.Event<void> = AgenteHotReloadManager.queueChangeEmitter.event;
+    private static lastResult: { file: string; success: boolean; timestamp: number } | undefined;
+
     constructor() { }
 
     static setPaused(paused: boolean): void {
@@ -102,6 +107,7 @@ export class AgenteHotReloadManager {
         this.mostrarSpinner(javaAbsPath);
 
         this.changeQueue.push({ filename, project });        
+        this.queueChangeEmitter.fire();
         if (this.processTimer) { clearTimeout(this.processTimer); }
 
         this.processTimer = setTimeout(() => {
@@ -174,6 +180,8 @@ export class AgenteHotReloadManager {
                 return a.timestamp - b.timestamp;
             });
 
+            this.queueChangeEmitter.fire();
+
             if (!this.isWorkerRunning || !this.workerPromise) {
                 this.workerPromise = this.runCompilationWorker();
             }
@@ -197,6 +205,7 @@ export class AgenteHotReloadManager {
 
         this.isWorkerRunning = false;
         this.workerPromise = null;
+        this.queueChangeEmitter.fire();
         Logger.debug('DEBUG', 'CompilationWorker detenido');
     }
 
@@ -226,6 +235,9 @@ export class AgenteHotReloadManager {
                     success = await this.compilarConServidor(job.javaFile, job.project);
                     break;
             }
+
+            this.lastResult = { file: job.javaFile, success, timestamp: Date.now() };
+            this.queueChangeEmitter.fire();
 
             if (success) {
                 job.resolve(true);
@@ -928,6 +940,16 @@ public class MM43CompilerServer {
 
     private static delay(ms: number): Promise<void> {
         return new Promise(r => setTimeout(r, ms));
+    }
+
+    /** Total de cambios pendientes: debounce + cola de compilacion activa */
+    static getQueueSize(): number {
+        return this.compilationQueue.length + this.changeQueue.length;
+    }
+
+    /** Ultimo resultado de compilacion/hotswap, para mostrar en el panel de Servidor */
+    static getLastResult(): { file: string; success: boolean; timestamp: number } | undefined {
+        return this.lastResult;
     }
 
     private static execCommand(cmd: string, timeout: number = 30000): Promise<{ stdout: string; stderr: string }> {

@@ -2,8 +2,10 @@ import * as vscode from 'vscode';
 import { ConfigManager } from '../config/ConfigManager';
 import { ServerState, WatcherState } from '../config/types';
 import { DeployedApp } from '../modules/server/ServerManager';
+import { AgenteHotReloadManager } from '../modules/hotreload/AgenteHotReloadManager';
+import { HotReloadClient } from '../modules/hotreload/HotReloadClient';
 
-type ServerActionKind = 'status' | 'action';
+type ServerGroupId = 'quick' | 'agent' | 'maintenance' | 'config';
 
 class ServerActionItem extends vscode.TreeItem {
     constructor(
@@ -20,7 +22,21 @@ class ServerActionItem extends vscode.TreeItem {
     }
 }
 
-/** Nodo padre colapsable para la sección de apps desplegadas */
+/** Nodo agrupador colapsable real (reemplaza los separadores de texto anteriores) */
+class ServerGroupItem extends vscode.TreeItem {
+    constructor(
+        public readonly groupId: ServerGroupId,
+        label: string,
+        iconId: string,
+        collapsibleState: vscode.TreeItemCollapsibleState = vscode.TreeItemCollapsibleState.Collapsed
+    ) {
+        super(label, collapsibleState);
+        this.iconPath = new vscode.ThemeIcon(iconId);
+        this.contextValue = 'mm43ServerGroup';
+    }
+}
+
+/** Nodo padre colapsable para la seccion de apps desplegadas */
 class DeployedAppsParentItem extends vscode.TreeItem {
     constructor(appCount?: number) {
         const label = appCount !== undefined
@@ -32,20 +48,22 @@ class DeployedAppsParentItem extends vscode.TreeItem {
     }
 }
 
-/** Nodo hijo representando una aplicación desplegada */
+/** Nodo hijo representando una aplicacion desplegada */
 class DeployedAppItem extends vscode.TreeItem {
     constructor(public readonly app: DeployedApp) {
         super(app.name, vscode.TreeItemCollapsibleState.None);
         this.description = `<${app.type}>`;
         this.iconPath = new vscode.ThemeIcon('globe');
         this.contextValue = 'mm43DeployedApp';
-        this.tooltip = `Aplicación: ${app.name}\nTipo: ${app.type}\n\nClic derecho → Undeploy`;
+        this.tooltip = `Aplicacion: ${app.name}\nTipo: ${app.type}\n\nClic derecho para Undeploy`;
     }
 }
 
 /**
- * TreeDataProvider para el panel "Servidor Payara" en el sidebar.
- * Muestra el estado del servidor y las acciones disponibles.
+ * TreeDataProvider para el panel "Servidor" en el sidebar.
+ * Muestra el estado del servidor, del watcher y del pipeline Hot-Reload
+ * (cola de compilacion + conexion viva con el agente JVM), y las acciones
+ * agrupadas por frecuencia de uso (flujo diario vs avanzado).
  */
 export class ServerProvider implements vscode.TreeDataProvider<vscode.TreeItem> {
 
@@ -57,14 +75,19 @@ export class ServerProvider implements vscode.TreeDataProvider<vscode.TreeItem> 
     private deployedApps: DeployedApp[] = [];
     private deployedAppsLoaded = false;
 
+    /** Resultado del ultimo ping TCP al agente Hot-Reload (independiente de si esta "configurado") */
+    private agentAlive = false;
+
     /** Callback para obtener la lista de apps — se inyecta desde Context.ts */
     private listAppsFn: (() => Promise<DeployedApp[]>) | undefined;
 
     constructor() {
         ConfigManager.onDidChange(() => this.refresh());
+        // Cualquier cambio en la cola de compilacion Hot-Reload refresca el panel en vivo
+        AgenteHotReloadManager.onQueueChange(() => this.refresh());
     }
 
-    /** Inyectar la función que lista apps del servidor */
+    /** Inyectar la funcion que lista apps del servidor */
     setListAppsFn(fn: () => Promise<DeployedApp[]>): void {
         this.listAppsFn = fn;
     }
@@ -88,6 +111,25 @@ export class ServerProvider implements vscode.TreeDataProvider<vscode.TreeItem> 
         this._onDidChangeTreeData.fire();
     }
 
+    /**
+     * Verifica si el agente Hot-Reload responde en el puerto TCP configurado.
+     * Se llama periodicamente desde Context.ts mientras el servidor esta activo,
+     * y tras acciones que pueden afectar la conexion (start/restart/importar agente).
+     */
+    async refreshAgentStatus(): Promise<void> {
+        const agentPath = ConfigManager.getAgentPath();
+        const agentMode = ConfigManager.getAgentMode();
+
+        if (!agentPath || agentMode === 'none') {
+            this.agentAlive = false;
+            this.refresh();
+            return;
+        }
+
+        this.agentAlive = await HotReloadClient.isAgentAlive();
+        this.refresh();
+    }
+
     refresh(): void {
         this._onDidChangeTreeData.fire();
     }
@@ -99,7 +141,7 @@ export class ServerProvider implements vscode.TreeDataProvider<vscode.TreeItem> 
     async getChildren(element?: vscode.TreeItem): Promise<vscode.TreeItem[]> {
         const { serverPath, domain } = ConfigManager.getServerConfig();
 
-        // ── Si no hay configuración, solo mostrar botón de agregar ──
+        // ── Si no hay configuracion, solo mostrar boton de agregar ──
         if (!serverPath || !domain) {
             return [
                 new ServerActionItem('Configurar Servidor de Aplicaciones', {
@@ -111,11 +153,9 @@ export class ServerProvider implements vscode.TreeDataProvider<vscode.TreeItem> 
 
         // ── Sub-nodos del padre "Aplicaciones Desplegadas" ────────────
         if (element instanceof DeployedAppsParentItem) {
-            // Cargar lazily la primera vez que se expande
             if (!this.deployedAppsLoaded && this.listAppsFn) {
                 this.deployedApps = await this.listAppsFn();
                 this.deployedAppsLoaded = true;
-                // Re-fire para actualizar el conteo en el parent label
                 setTimeout(() => this._onDidChangeTreeData.fire(), 100);
             }
 
@@ -131,85 +171,152 @@ export class ServerProvider implements vscode.TreeDataProvider<vscode.TreeItem> 
             return this.deployedApps.map(app => new DeployedAppItem(app));
         }
 
-        // ── Raíz del árbol ────────────────────────────────────────────
-        const serverLabel = this.getServerLabel();
+        // ── Sub-nodos de cada grupo colapsable ─────────────────────────
+        if (element instanceof ServerGroupItem) {
+            return this.buildGroupChildren(element.groupId);
+        }
 
-        const statusItem = new vscode.TreeItem(serverLabel, vscode.TreeItemCollapsibleState.None);
-        statusItem.iconPath = new vscode.ThemeIcon(this.getServerIcon());
-        statusItem.description = `${domain} @ ${serverPath}`;
-        statusItem.contextValue = 'mm43ServerStatus';
-
-        const watcherLabel = this.watcherState === 'running'
-            ? 'Watcher Java: ACTIVO'
-            : 'Watcher Java: DETENIDO';
-        const watcherItem = new vscode.TreeItem(watcherLabel, vscode.TreeItemCollapsibleState.None);
-        watcherItem.contextValue = 'mm43WatcherStatus';
-
-        const separator = new vscode.TreeItem('─────────────────', vscode.TreeItemCollapsibleState.None);
-
-        // ── Nodo desplegable de apps ──────────────────────────────────
-        const deployedParent = new DeployedAppsParentItem(
-            this.deployedAppsLoaded ? this.deployedApps.length : undefined
-        );
-
+        // ── Raiz del arbol ──────────────────────────────────────────────
         return [
-            statusItem,
-            watcherItem,
+            this.buildServerStatusItem(),
+            this.buildWatcherStatusItem(),
             this.buildAgentStatusItem(),
-            separator,
-            deployedParent,
-            new vscode.TreeItem('─────────────────', vscode.TreeItemCollapsibleState.None),
-            // Acciones del servidor
-            new ServerActionItem('Consultar Estado del Servidor', {
-                command: 'mm43.checkServerStatus', title: 'Consultar Estado'
-            }, 'pulse'),
-            new ServerActionItem('Iniciar Servidor', {
-                command: 'mm43.startServer', title: 'Iniciar Servidor'
-            }, 'play'),
-            new ServerActionItem('Detener Servidor', {
-                command: 'mm43.stopServer', title: 'Detener Servidor'
-            }, 'debug-stop'),
-            new ServerActionItem('Redeploy Completo', {
-                command: 'mm43.restartServer', title: 'Redeploy Completo'
-            }, 'refresh'),
-            new ServerActionItem('Ver Logs', {
-                command: 'mm43.showServerLogs', title: 'Ver Logs'
-            }, 'output'),
-            new ServerActionItem('Limpiar Caches', {
-                command: 'mm43.clearServerCache', title: 'Limpiar Caches'
-            }, 'trash'),
-            new ServerActionItem('Limpiar server.log', {
-                command: 'mm43.clearServerLogs', title: 'Limpiar server.log'
-            }, 'close'),
-            new ServerActionItem('Agregar Proyecto al Servidor', {
-                command: 'mm43.deployExploded', title: 'Agregar Proyecto'
-            }, 'add'),
-            new vscode.TreeItem('── Agente Hot-Reload ──', vscode.TreeItemCollapsibleState.None),
-            ...this.buildAgentActions(),
-            new vscode.TreeItem('─────────────────', vscode.TreeItemCollapsibleState.None),
-            new ServerActionItem('Configurar/Cambiar Servidor', {
-                command: 'mm43.addServer', title: 'Configurar Servidor'
-            }, 'edit'),
-            new ServerActionItem('Eliminar Configuración de Servidor', {
-                command: 'mm43.removeServer', title: 'Eliminar Servidor'
-            }, 'trash'),
+            this.buildQueueStatusItem(),
+            new ServerGroupItem('quick', 'Acciones Rapidas', 'rocket', vscode.TreeItemCollapsibleState.Expanded),
+            new DeployedAppsParentItem(this.deployedAppsLoaded ? this.deployedApps.length : undefined),
+            new ServerGroupItem('agent', 'Agente Hot-Reload', 'zap'),
+            new ServerGroupItem('maintenance', 'Mantenimiento', 'wrench'),
+            new ServerGroupItem('config', 'Configuracion', 'settings-gear'),
         ];
     }
 
+    private buildGroupChildren(groupId: ServerGroupId): vscode.TreeItem[] {
+        switch (groupId) {
+            case 'quick':
+                return [
+                    new ServerActionItem('Iniciar Servidor', {
+                        command: 'mm43.startServer', title: 'Iniciar Servidor'
+                    }, 'play'),
+                    new ServerActionItem('Detener Servidor', {
+                        command: 'mm43.stopServer', title: 'Detener Servidor'
+                    }, 'debug-stop'),
+                    new ServerActionItem('Redeploy Completo', {
+                        command: 'mm43.restartServer', title: 'Redeploy Completo'
+                    }, 'refresh'),
+                    new ServerActionItem('Ver Logs', {
+                        command: 'mm43.showServerLogs', title: 'Ver Logs'
+                    }, 'output'),
+                ];
+
+            case 'agent':
+                return this.buildAgentActions();
+
+            case 'maintenance':
+                return [
+                    new ServerActionItem('Consultar Estado del Servidor', {
+                        command: 'mm43.checkServerStatus', title: 'Consultar Estado'
+                    }, 'pulse'),
+                    new ServerActionItem('Agregar Proyecto al Servidor', {
+                        command: 'mm43.deployExploded', title: 'Agregar Proyecto'
+                    }, 'add'),
+                    new ServerActionItem('Limpiar Caches', {
+                        command: 'mm43.clearServerCache', title: 'Limpiar Caches'
+                    }, 'trash'),
+                    new ServerActionItem('Limpiar server.log', {
+                        command: 'mm43.clearServerLogs', title: 'Limpiar server.log'
+                    }, 'close'),
+                ];
+
+            case 'config':
+                return [
+                    new ServerActionItem('Configurar/Cambiar Servidor', {
+                        command: 'mm43.addServer', title: 'Configurar Servidor'
+                    }, 'edit'),
+                    new ServerActionItem('Eliminar Configuracion de Servidor', {
+                        command: 'mm43.removeServer', title: 'Eliminar Servidor'
+                    }, 'trash'),
+                ];
+
+            default:
+                return [];
+        }
+    }
+
+    // ── Nodos de estado (raiz, siempre visibles) ───────────────────────
+
+    private buildServerStatusItem(): vscode.TreeItem {
+        const { serverPath, domain } = ConfigManager.getServerConfig();
+        const item = new vscode.TreeItem(this.getServerLabel(), vscode.TreeItemCollapsibleState.None);
+        item.iconPath = new vscode.ThemeIcon(this.getServerIcon());
+        item.description = `${domain} @ ${serverPath}`;
+        item.contextValue = 'mm43ServerStatus';
+        return item;
+    }
+
+    private buildWatcherStatusItem(): vscode.TreeItem {
+        const label = this.watcherState === 'running'
+            ? 'Watcher Java: Activo'
+            : 'Watcher Java: Detenido';
+        const item = new vscode.TreeItem(label, vscode.TreeItemCollapsibleState.None);
+        item.iconPath = new vscode.ThemeIcon(this.watcherState === 'running' ? 'eye' : 'eye-closed');
+        item.contextValue = 'mm43WatcherStatus';
+        return item;
+    }
+
+    /** Indicador vivo de la cola interna de AgenteHotReloadManager (debounce + compilacion) */
+    private buildQueueStatusItem(): vscode.TreeItem {
+        const queueSize = AgenteHotReloadManager.getQueueSize();
+        const lastResult = AgenteHotReloadManager.getLastResult();
+
+        let label: string;
+        let icon: string;
+
+        if (queueSize > 0) {
+            label = `Cola Hot-Reload: ${queueSize} pendiente${queueSize === 1 ? '' : 's'}`;
+            icon = 'sync~spin';
+        } else if (lastResult) {
+            const secs = Math.max(0, Math.round((Date.now() - lastResult.timestamp) / 1000));
+            label = `Cola Hot-Reload: vacia (ultimo hace ${secs}s)`;
+            icon = lastResult.success ? 'check' : 'error';
+        } else {
+            label = 'Cola Hot-Reload: vacia';
+            icon = 'check';
+        }
+
+        const item = new vscode.TreeItem(label, vscode.TreeItemCollapsibleState.None);
+        item.iconPath = new vscode.ThemeIcon(icon);
+        if (lastResult) {
+            const separadorIndex = Math.max(lastResult.file.lastIndexOf('\\'), lastResult.file.lastIndexOf('/'));
+            const nombre = lastResult.file.substring(separadorIndex + 1);
+            item.tooltip = `Ultimo archivo: ${nombre}\nResultado: ${lastResult.success ? 'OK' : 'ERROR'}`;
+        }
+        item.contextValue = 'mm43QueueStatus';
+        return item;
+    }
+
+    /** Estado de conexion real con el agente JVM (distinto de "esta configurado") */
     private buildAgentStatusItem(): vscode.TreeItem {
         const agentPath = ConfigManager.getAgentPath();
         const agentMode = ConfigManager.getAgentMode();
 
         if (!agentPath || agentMode === 'none') {
-            const item = new vscode.TreeItem('Agente: No importado', vscode.TreeItemCollapsibleState.None);
+            const item = new vscode.TreeItem('Agente Hot-Reload: No importado', vscode.TreeItemCollapsibleState.None);
+            item.iconPath = new vscode.ThemeIcon('circle-slash');
             item.contextValue = 'mm43AgentStatus';
             return item;
         }
 
-        const modeLabel = agentMode === 'dcevm' ? 'DCEVM (Completo)' : 'Básico';
-        const icon = agentMode === 'dcevm' ? '$(zap)' : '$(warning)';
-        const item = new vscode.TreeItem(`${icon} Agente: ${modeLabel}`, vscode.TreeItemCollapsibleState.None);
-        item.tooltip = `Ruta: ${agentPath}\nModo: ${modeLabel}`;
+        const modeLabel = agentMode === 'dcevm' ? 'DCEVM (Completo)' : 'Basico';
+        const label = this.agentAlive
+            ? `Agente: ${modeLabel} - Conectado`
+            : `Agente: ${modeLabel} - Sin respuesta`;
+        const icon = this.agentAlive
+            ? (agentMode === 'dcevm' ? 'zap' : 'warning')
+            : 'debug-disconnect';
+
+        const item = new vscode.TreeItem(label, vscode.TreeItemCollapsibleState.None);
+        item.iconPath = new vscode.ThemeIcon(icon);
+        item.tooltip = `Ruta: ${agentPath}\nModo: ${modeLabel}\nConexion: ${this.agentAlive ? 'activa' : 'sin respuesta'}`;
         item.contextValue = 'mm43AgentStatus';
         return item;
     }
@@ -227,16 +334,16 @@ export class ServerProvider implements vscode.TreeDataProvider<vscode.TreeItem> 
         }
 
         return [
-            new ServerActionItem('$(cloud-download) Cambiar Agente', {
+            new ServerActionItem('Cambiar Agente', {
                 command: 'mm43.importAgent', title: 'Cambiar Agente'
             }, 'cloud-download'),
-            new ServerActionItem('$(zap) Inyectar Agente en Servidor (asadmin)', {
+            new ServerActionItem('Inyectar Agente en Servidor (asadmin)', {
                 command: 'mm43.injectAgentOptions', title: 'Inyectar Opciones'
-            }, 'zap'),
-            new ServerActionItem('$(code) Abrir domain.xml (Config manual)', {
+            }, 'plug'),
+            new ServerActionItem('Abrir domain.xml (Config manual)', {
                 command: 'mm43.openDomainXml', title: 'Abrir domain.xml'
             }, 'code'),
-            new ServerActionItem('$(trash) Eliminar Agente', {
+            new ServerActionItem('Eliminar Agente', {
                 command: 'mm43.removeAgent', title: 'Eliminar Agente'
             }, 'trash'),
         ];
@@ -244,11 +351,11 @@ export class ServerProvider implements vscode.TreeDataProvider<vscode.TreeItem> 
 
     private getServerLabel(): string {
         switch (this.serverState) {
-            case 'running': return 'Servidor: ACTIVO';
-            case 'starting': return 'Servidor: Iniciando...';
-            case 'stopping': return 'Servidor: Deteniendo...';
-            case 'stopped': return 'Servidor: DETENIDO';
-            default: return 'Servidor: ?';
+            case 'running': return 'Servidor: Activo';
+            case 'starting': return 'Servidor: Iniciando';
+            case 'stopping': return 'Servidor: Deteniendo';
+            case 'stopped': return 'Servidor: Detenido';
+            default: return 'Servidor: Desconocido';
         }
     }
 

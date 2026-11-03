@@ -61,6 +61,10 @@ export async function activate(context: vscode.ExtensionContext) {
             statusBar.setWatcherState('stopped');
             serverProvider.setWatcherState('stopped');
             assetWatcher.stopAll();
+        } else {
+            // Dar tiempo a que la JVM del servidor termine de arrancar (y cargue el -javaagent)
+            // antes de intentar el ping TCP al agente Hot-Reload.
+            setTimeout(() => serverProvider.refreshAgentStatus(), 5000);
         }
     });
 
@@ -88,6 +92,16 @@ export async function activate(context: vscode.ExtensionContext) {
     );
 
     serverProvider.setListAppsFn(() => serverManager.listApplications());
+
+    // Ping periodico al agente Hot-Reload: mantiene el indicador de conexion
+    // del panel de Servidor sincronizado con la realidad (JVM caida, agente colgado, etc).
+    const agentStatusInterval = setInterval(() => {
+        if (serverManager.getServerState() === 'running') {
+            serverProvider.refreshAgentStatus();
+        }
+    }, 8000);
+    context.subscriptions.push({ dispose: () => clearInterval(agentStatusInterval) });
+    serverProvider.refreshAgentStatus();
 
     context.subscriptions.push(
         vscode.commands.registerCommand('mm43.refreshProjects', () => {
@@ -585,6 +599,7 @@ export async function activate(context: vscode.ExtensionContext) {
             Logger.debug('DEBUG', 'Comando mm43.importAgent ejecutado');
             await agente.importAgent();
             serverProvider.refresh();
+            await serverProvider.refreshAgentStatus();
         }),
 
         vscode.commands.registerCommand('mm43.removeAgent', async () => {
@@ -597,6 +612,7 @@ export async function activate(context: vscode.ExtensionContext) {
                 Logger.debug('DEBUG', 'Eliminando agente...');
                 await agente.removeAgent();
                 serverProvider.refresh();
+                await serverProvider.refreshAgentStatus();
             }
         }),
 
