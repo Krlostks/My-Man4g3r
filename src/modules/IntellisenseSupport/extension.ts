@@ -1,0 +1,578 @@
+import * as _ from 'lodash';
+import * as VError from 'verror';
+import { CompletionItem, CompletionItemKind, Disposable, ExtensionContext, Hover, MarkdownString, OutputChannel, Position, Range, TextDocument, commands, languages, window, workspace } from 'vscode';
+import { ComponentDefinition, XmlNamespace } from './common';
+import Notifier from './notifier';
+import ParseEngineGateway from './parse-engine-gateway';
+
+enum Command {
+    cache = 'faces-intellisense.cache'
+}
+
+enum Configuration {
+    languages = 'faces-intellisense.languages',
+    primeVersion = 'faces-intellisense.primeVersion',
+    primeExtVersion = 'faces-intellisense.primeExtVersion',
+    omniVersion = 'faces-intellisense.omniVersion',
+    richVersion = 'faces-intellisense.richVersion',
+    facesVersion = 'faces-intellisense.facesVersion'
+}
+
+const notifier: Notifier = new Notifier(Command.cache);
+const completionTriggerChars = ['"', "'", ' ', '.'];
+let caching = false;
+const htmlDisposables: Disposable[] = [];
+let _output: OutputChannel;
+
+const supportedXmlNamespaces: XmlNamespace[] = [
+    {
+        id: 'a4j',
+        urls: ['http://richfaces.org/a4j'],
+        dataFilename: richFacesSubTag('a4j'),
+        uniqueDefinitions: []
+    },
+    {
+        id: 'r',
+        urls: ['http://richfaces.org/rich'],
+        dataFilename: richFacesSubTag('richfaces'),
+        uniqueDefinitions: []
+    },
+    {
+        id: 'o',
+        urls: ['http://omnifaces.org/ui', 'omnifaces.ui'],
+        dataFilename: workspace.getConfiguration().get<string>(Configuration.omniVersion) ?? '',
+        uniqueDefinitions: []
+    },
+    {
+        id: 'p',
+        urls: ['http://primefaces.org/ui', 'primefaces'],
+        dataFilename: workspace.getConfiguration().get<string>(Configuration.primeVersion) ?? '',
+        uniqueDefinitions: []
+    },
+    {
+        id: 'pe',
+        urls: ['http://primefaces.org/ui/extensions', 'primefaces.extensions'],
+        dataFilename: workspace.getConfiguration().get<string>(Configuration.primeExtVersion) ?? '',
+        uniqueDefinitions: []
+    },
+    {
+        id: 'c',
+        urls: !isJakartaVersion() ? ['http://xmlns.jcp.org/jsp/jstl/core'] : ['jakarta.tags.core'],
+        dataFilename: 'c',
+        uniqueDefinitions: []
+    },
+    {
+        id: 'cc',
+        urls: !isJakartaVersion() ? ['http://java.sun.com/jsf/composite', 'http://xmlns.jcp.org/jsf/composite'] : ['jakarta.faces.composite'],
+        dataFilename: 'cc',
+        uniqueDefinitions: []
+    },
+    {
+        id: 'f',
+        urls: !isJakartaVersion() ? ['http://java.sun.com/jsf/core', 'http://xmlns.jcp.org/jsf/core'] : ['jakarta.faces.core'],
+        dataFilename: 'f',
+        uniqueDefinitions: []
+    },
+    {
+        id: 'h',
+        urls: !isJakartaVersion() ? ['http://java.sun.com/jsf/html', 'http://xmlns.jcp.org/jsf/html'] : ['jakarta.faces.html'],
+        dataFilename: 'h',
+        uniqueDefinitions: []
+    },
+    {
+        id: 'ui',
+        urls: !isJakartaVersion() ? ['http://java.sun.com/jsf/facelets', 'http://xmlns.jcp.org/jsf/facelets'] : ['jakarta.faces.facelets'],
+        dataFilename: 'ui',
+        uniqueDefinitions: []
+    }
+];
+
+/**
+ * Activates the extension.
+ * @param {ExtensionContext} context - The extension context.
+ * @returns {Promise<void>} A promise that resolves when the activation is complete.
+ */
+export async function activate(context: ExtensionContext): Promise<void> {
+    const disposables: Disposable[] = [];
+    _output = window.createOutputChannel('faces-intellisense');
+    context.subscriptions.push(_output);
+    _output.appendLine('Activating extension!');
+
+    /**
+     * Handles configuration changes.
+     * @param {ConfigurationChangeEvent} e - The configuration change event.
+     */
+    workspace.onDidChangeConfiguration(
+        async (e) => {
+            try {
+                if (e.affectsConfiguration(Configuration.languages)) {
+                    unregisterComponentProviders(htmlDisposables);
+                    registerComponentProviders(htmlDisposables);
+                }
+            } catch (err) {
+                const newErr = new VError('err', 'Failed to automatically reload the extension after the configuration change');
+                console.error(newErr);
+                window.showErrorMessage(newErr.message);
+            }
+        },
+        null,
+        disposables
+    );
+
+    context.subscriptions.push(...disposables);
+
+    /**
+     * Registers the cache command.
+     */
+    context.subscriptions.push(
+        commands.registerCommand(Command.cache, async () => {
+            if (caching) {
+                return;
+            }
+            caching = true;
+            try {
+                await cache();
+            } catch (err) {
+                const newErr = new VError('err', 'Failed to cache the components in the workspace');
+                console.error(newErr);
+                window.showErrorMessage(newErr.message);
+            } finally {
+                caching = false;
+            }
+        })
+    );
+    registerComponentProviders(htmlDisposables);
+
+    // Initial caching
+    caching = true;
+    try {
+        await cache();
+    } catch (err) {
+        const newErr = new VError('err', 'Failed to cache the components in the workspace for the first time');
+        console.error(newErr);
+        window.showErrorMessage(newErr.message);
+    } finally {
+        caching = false;
+    }
+}
+
+/**
+ * Deactivates the extension.
+ */
+export function deactivate(): void {
+    unregisterComponentProviders(htmlDisposables);
+}
+
+/**
+ * Clears the cache for all supported XML namespaces.
+ * @async
+ * @returns {Promise<void>}
+ * @throws {VError} If clearing the cache fails.
+ */
+async function cache(): Promise<void> {
+    try {
+        notifier.notify('eye', 'Clear cache taglib...');
+        supportedXmlNamespaces.forEach((xmlns) => (xmlns.uniqueDefinitions = []));
+        notifier.notify('zap', 'Clean components cache... (click to clean cache again)');
+    } catch (err) {
+        notifier.notify('alert', 'Failed to clean cache the components');
+        throw new VError('err', 'Failed to clean cache the component definitions');
+    }
+}
+
+/**
+ * Registers component providers for all configured languages.
+ * @param {Disposable[]} disposables - Array to store disposable objects.
+ */
+function registerComponentProviders(disposables: Disposable[]) {
+    workspace
+        .getConfiguration()
+        ?.get<string[]>(Configuration.languages)
+        ?.forEach((extension) => {
+            disposables.push(registerCompletionProvider(extension));
+            disposables.push(registerHoverProvider(extension));
+        });
+}
+
+/**
+ * Unregisters all component providers.
+ * @param {Disposable[]} disposables - Array of disposable objects to be disposed.
+ */
+function unregisterComponentProviders(disposables: Disposable[]) {
+    disposables.forEach((disposable) => disposable.dispose());
+    disposables.length = 0;
+}
+
+/**
+ * Registers a completion provider for the specified language.
+ *
+ * @param {string} languageSelector - The language identifier to register the completion provider for.
+ * @param {string} [classPrefix=''] - Optional prefix to add to the completion class names.
+ * @returns {Disposable} A disposable object that can be used to unregister the completion provider.
+ */
+function registerCompletionProvider(languageSelector: string, classPrefix = ''): Disposable {
+    return languages.registerCompletionItemProvider(
+        languageSelector,
+        {
+            /**
+             * Provides completion items for the given position in the document.
+             *
+             * @param {TextDocument} document - The document in which the completion was invoked.
+             * @param {Position} position - The position at which the completion was invoked.
+             * @returns {CompletionItem[]} An array of completion items.
+             */
+            provideCompletionItems(document: TextDocument, position: Position): CompletionItem[] {
+                //_output.appendLine(`In autocomplete, position is ${position.line}:${position.character}`);
+                const start: Position = new Position(position.line, 0);
+                const range: Range = new Range(start, position);
+                const text: string = document.getText(range);
+                let autoSearch: string = '';
+                let xmlnsPrefix: string = text.trimStart();
+
+                if (!xmlnsPrefix.includes(' ')) {
+                    const ind = xmlnsPrefix.indexOf(':');
+                    if (ind > -1 && ind + 1 < xmlnsPrefix.length) {
+                        autoSearch = xmlnsPrefix.substring(ind + 1);
+                        xmlnsPrefix = xmlnsPrefix.substring(0, ind + 1);
+                    }
+                } else {
+                    xmlnsPrefix = text.trim();
+                }
+                aliasFromDocument(document, position);
+                const xmlns = supportedXmlNamespaces.find((xmlns) => xmlns.aliasInDoc === xmlnsPrefix);
+
+                // Find the components
+                if (xmlnsPrefix !== '' && xmlns) {
+                    return xmlns.uniqueDefinitions
+                        .filter((definition) => autoSearch === '' || definition.component.name.startsWith(autoSearch))
+                        .map((definition) => {
+                            const completionItem = new CompletionItem(definition.component.name, CompletionItemKind.Property);
+                            completionItem.documentation = definition.component.description || '???Missing description???';
+                            const completionClassName = `${classPrefix}${definition.component.name}`;
+                            completionItem.filterText = completionClassName;
+                            completionItem.insertText = completionClassName;
+                            completionItem.detail = 'XMLNS: ' + xmlns?.dataFilename.toUpperCase();
+                            return completionItem;
+                        });
+                }
+                // Find component attributes
+                else {
+                    const componentInfo: Map<string, string> = getComponentInformation(document, position);
+                    const xmlnsPrefix = componentInfo.get('xmlnsPrefix') ? '<' + componentInfo.get('xmlnsPrefix') + ':' : '';
+                    const componentName = componentInfo.get('componentName');
+                    const attributes = componentInfo.get('attributes');
+
+                    if (xmlnsPrefix !== '') {
+                        aliasFromDocument(document, position);
+                        const xmlns = supportedXmlNamespaces.find((xmlns) => xmlns.aliasInDoc === xmlnsPrefix);
+                        if (xmlnsPrefix !== '' && xmlns) {
+                            const componentItem = xmlns.uniqueDefinitions.filter((definition) => definition.component.name === componentName).find(() => true);
+
+                            if (componentItem === undefined) {
+                                return [];
+                            }
+
+                            const completionItems = componentItem.component.attributes.map((definition) => {
+                                const { description = '???Missing description???', required, type, name } = definition;
+                                const documentationText = [description, `Required: ${required}`, `Type: ${type}`].join('\n');
+
+                                const completionClassName = `${classPrefix}${name}`;
+                                const completionItem = new CompletionItem(name, CompletionItemKind.Property);
+
+                                completionItem.documentation = documentationText;
+                                completionItem.filterText = completionClassName;
+                                completionItem.insertText = `${completionClassName}=""`;
+                                completionItem.detail = `XMLNS: ${xmlns?.dataFilename.toUpperCase()}`;
+                                return completionItem;
+                            });
+
+                            if (attributes && attributes.length > 0) {
+                                const attributesOnComponent = attributes.split('|');
+                                // Removes from the collection the attributes already specified on the component
+                                for (const attributeOnComponent of attributesOnComponent) {
+                                    for (let j = 0; j < completionItems.length; j++) {
+                                        if (completionItems[j].insertText === attributeOnComponent + '=""') {
+                                            completionItems.splice(j, 1);
+                                        }
+                                    }
+                                }
+                            }
+                            return completionItems;
+                        }
+                    }
+                }
+                return [];
+            }
+        },
+        ...completionTriggerChars
+    );
+}
+
+/**
+ * Registers a hover provider for the specified language.
+ *
+ * @param {string} languageSelector - The language identifier to register the hover provider for.
+ * @returns {Disposable} A disposable object that can be used to unregister the hover provider.
+ */
+function registerHoverProvider(languageSelector: string): Disposable {
+    return languages.registerHoverProvider(languageSelector, {
+        /**
+         * Provides hover information for the given position in the document.
+         *
+         * @param {TextDocument} document - The document in which the hover was invoked.
+         * @param {Position} position - The position at which the hover was invoked.
+         * @returns {Hover | null} A Hover object containing the hover information, or null if no information is available.
+         */
+        provideHover(document: TextDocument, position: Position): Hover | null {
+            const wordRange: Range | undefined = document.getWordRangeAtPosition(position, /(\w+:\w+)|\w+[=]/);
+            if (!wordRange) {
+                return null;
+            }
+
+            const word = document.getText(wordRange);
+            aliasFromDocument(document, position);
+
+            let xmlnsPrefix: string,
+                componentName: string,
+                attributeName: string | null = null;
+
+            if (word.includes(':')) {
+                [xmlnsPrefix, componentName] = word.split(':');
+                xmlnsPrefix = '<' + xmlnsPrefix + ':';
+            } else {
+                attributeName = word.substring(0, word.length - 1);
+                const componentInfo: Map<string, string> = getComponentInformation(document, position);
+                xmlnsPrefix = componentInfo.get('xmlnsPrefix') ? '<' + componentInfo.get('xmlnsPrefix') + ':' : '';
+                componentName = componentInfo.get('componentName') || '';
+            }
+
+            const xmlns = supportedXmlNamespaces.find((xmlns) => xmlns.aliasInDoc === xmlnsPrefix);
+            if (!xmlns) {
+                return null;
+            }
+
+            const componentItem = xmlns.uniqueDefinitions.find((definition) => definition.component.name === componentName);
+            if (!componentItem) {
+                return null;
+            }
+
+            const contents = new MarkdownString();
+            contents.isTrusted = true;
+            contents.supportHtml = true;
+
+            if (attributeName) {
+                const attr = componentItem.component.attributes.find((attribute) => attribute.name === attributeName);
+                if (!attr) {
+                    return null;
+                }
+                const description = attr.description || '???Missing description???';
+                contents.appendMarkdown(`**${attr.name}:** ${description}\n\n`);
+                contents.appendMarkdown(`**Required:** ${attr.required}\n\n`);
+                contents.appendMarkdown(`**Type:** ${attr.type}\n\n`);
+            } else {
+                contents.appendMarkdown(`**${componentName}:** ${componentItem.component.description}`);
+            }
+
+            return new Hover(contents, new Range(position, position));
+        }
+    });
+}
+
+/**
+ * Get all the xmlns prefixes used in the document and register them in each of the supportedXmlNamespaces.
+ *
+ * @param {TextDocument} document - The document to analyze.
+ * @param {Position} position - The current position in the document.
+ */
+function aliasFromDocument(document: TextDocument, position: Position) {
+    const start: Position = new Position(0, 0);
+    const range: Range = new Range(start, position);
+    let allText: string = document.getText(range);
+    allText = allText.toLowerCase();
+    supportedXmlNamespaces.forEach((xmlns) => {
+        xmlns.aliasInDoc = '';
+        xmlns.urls.forEach((url) => {
+            if (allText.includes('"' + url + '"')) {
+                xmlns.aliasInDoc = getXmlnsAlias(allText, url);
+                loadAllXmlnsContent(xmlns);
+            }
+        });
+    });
+}
+
+/**
+ * Extracts the XML namespace alias from the given text.
+ *
+ * @param {string} allText - The full text to search within.
+ * @param {string} xmlnsTag - The XML namespace tag to find.
+ * @returns {string} The extracted XML namespace alias, prefixed with '<' and suffixed with ':'.
+ */
+function getXmlnsAlias(allText: string, xmlnsTag: string): string {
+    let tag: string = '';
+    const index: number = allText.indexOf(xmlnsTag);
+    tag = allText.substring(0, index);
+    const indexXMLNS: number = tag.lastIndexOf('xmlns:');
+    tag = tag.substring(indexXMLNS + 6, tag.length - 2);
+    return '<' + tag + ':';
+}
+
+/**
+ * Load all taglib content from xmlns (components and attributes).
+ * Loading is only done if the elements have not been loaded previously.
+ *
+ * @param {XmlNamespace} xmlns - The XML namespace object to load content for.
+ * @throws {VError} If there's an error parsing documents or caching component definitions.
+ */
+function loadAllXmlnsContent(xmlns: XmlNamespace): void {
+    if (!xmlns || xmlns.uniqueDefinitions.length > 0) {
+        return;
+    }
+
+    try {
+        let uniqueComponentDefinition: ComponentDefinition[] = [];
+        const componentDefinitions: ComponentDefinition[] = [];
+        const failedLogs = '';
+        const failedLogsCount = 0;
+        try {
+            Array.prototype.push.apply(componentDefinitions, ParseEngineGateway.callParser(xmlns.dataFilename));
+        } catch (err) {
+            notifier.notify('alert', 'Failed to cache the components in the workspace (click for another attempt)');
+            throw new VError('err', 'Failed to parse the documents');
+        }
+        uniqueComponentDefinition = _.uniqBy(componentDefinitions, (def) => def.component.name);
+        if (failedLogsCount > 0) {
+            console.log(failedLogsCount, 'failed attempts to parse. List of the documents:');
+            console.log(failedLogs);
+        }
+        xmlns.uniqueDefinitions = uniqueComponentDefinition;
+    } catch (err) {
+        notifier.notify('alert', 'Failed to cache the components in the workspace (click for another attempt)');
+        throw new VError('err', 'Failed to cache the component definitions during the iterations over the documents that were found');
+    }
+}
+
+/**
+ * Gets the name of the component, the attribute and possible attributes already used in it.
+ *
+ * @param {TextDocument} document - The text document to analyze.
+ * @param {Position} position - The current position in the document.
+ * @returns {Map<string, string>} A map containing component information:
+ *   - 'xmlnsPrefix': The XML namespace prefix.
+ *   - 'componentName': The name of the component.
+ *   - 'attributes': A string of pipe-separated attribute names already used in the component.
+ */
+function getComponentInformation(document: TextDocument, position: Position): Map<string, string> {
+    // Create a new Map to store component information
+    const componentInfo = new Map<string, string>();
+    // Initialize empty text string
+    let text: string = '';
+    // Create start position at beginning of document
+    const start: Position = new Position(0, 0);
+    // Create range from start to current position
+    const range: Range = new Range(start, position);
+    // Get all text from start to current position
+    const allText: string = document.getText(range);
+    // Find index of last opening angle bracket
+    let lastC: number = allText.lastIndexOf('<');
+    // Get substring from last opening bracket
+    text = allText.substring(lastC);
+
+    // Find indexes of space, tab and newlines
+    const blank_space = text.indexOf(' ');
+    const blank_tab = text.indexOf('\t');
+    const break_n = text.indexOf('\n');
+    const break_r = text.indexOf('\r');
+    let delimiter: number = -1;
+
+    // Get earliest space/tab position
+    const blank_ = blank_space === -1 ? blank_tab : blank_tab === -1 ? blank_space : Math.min(blank_space, blank_tab);
+
+    // Get earliest newline position
+    const break_ = break_n === -1 ? break_r : break_r === -1 ? break_n : Math.min(break_n, break_r);
+
+    // Determine which comes first - space/tab or newline
+    if (blank_ < break_) {
+        delimiter = blank_ > -1 ? blank_ : break_;
+    } else if (break_ < blank_) {
+        delimiter = break_ > -1 ? break_ : blank_;
+    }
+    // Get substring up to delimiter
+    text = text.substring(0, delimiter);
+    // Remove opening angle bracket
+    text = text.replace('<', '');
+    // If text contains colon (namespace separator)
+    if (text.includes(':')) {
+        // Split on colon to get prefix and component name
+        const div = text.split(':');
+        componentInfo.set('xmlnsPrefix', div[0]);
+        componentInfo.set('componentName', div[1]);
+
+        // Initialize attributes string
+        let attributes: string = '';
+        // Find last occurrence of full component tag
+        lastC = allText.lastIndexOf('<' + div[0] + ':' + div[1]);
+        text = allText.substring(lastC);
+
+        // Return empty map if within attribute or tag is closed
+        if (inAttribute(text)) {
+            return new Map<string, string>();
+        }
+        if (text.includes('>')) {
+            return new Map<string, string>();
+        }
+        // Initialize index for attribute parsing
+        let index: number;
+        // Regex to match attributes
+        const rExp: RegExp = /(\w+=("|')([^"|']*)("|'))/g;
+        // Find all attribute matches
+        const rawClasses: RegExpMatchArray | null = text.match(rExp);
+        // If attributes found, process them
+        if (rawClasses && rawClasses.length > 0) {
+            rawClasses?.forEach((item) => {
+                // Get attribute name before equals sign
+                index = item.indexOf('=');
+                item = item.substring(0, index);
+                // Add to pipe-separated attribute string
+                attributes = attributes + (attributes !== '' ? '|' : '') + item;
+            });
+        }
+        // Store attributes in component info
+        componentInfo.set('attributes', attributes);
+    }
+    // Return the component information map
+    return componentInfo;
+}
+
+/**
+ * Determines if the cursor is positioned within an attribute value.
+ *
+ * @param {string} text - The text to analyze.
+ * @returns {boolean} True if the cursor is within an attribute value, false otherwise.
+ */
+export function inAttribute(text: string): boolean {
+    const doubleQuoteIndex = text.lastIndexOf('"');
+    const index = doubleQuoteIndex !== -1 ? doubleQuoteIndex : text.lastIndexOf("'");
+    return index !== -1 && text.charAt(index - 1) === '=';
+}
+
+/**
+ * Determines if the current Faces version is Jakarta.
+ *
+ * @returns {boolean} True if the Faces version is Jakarta, false otherwise.
+ */
+function isJakartaVersion(): boolean {
+    const faces = workspace.getConfiguration().get<string>(Configuration.facesVersion) || '';
+    return faces !== 'java-server-faces(1.0 - 2.2)' && faces !== 'jakarta-server-faces(2.3 - 3.0)';
+}
+
+/**
+ * Generates a RichFaces subtag with version information.
+ *
+ * @param {string} subtag - The base subtag to be appended with version information.
+ * @returns {string} The complete RichFaces subtag with version.
+ */
+function richFacesSubTag(subtag: string): string {
+    const rich: string = workspace.getConfiguration().get<string>(Configuration.richVersion) || '';
+    const vers = rich.substring(rich.lastIndexOf('-'));
+    return `${subtag}${vers}`;
+}
