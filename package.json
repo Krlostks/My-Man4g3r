@@ -7,7 +7,7 @@
   "files": [
     "dist/**",
     "src/**/*.ts",
-    "src/modules/xhtml/data/**/*.json"
+    "src/modules/IntellisenseSupport/parse-engines/data/**/*.json"
   ],
   "engines": {
     "vscode": "^1.85.0"
@@ -23,8 +23,12 @@
     "languages": [
       {
         "id": "html",
-        "extensions": [".xhtml"],
-        "aliases": ["XHTML"]
+        "extensions": [
+          ".xhtml"
+        ],
+        "aliases": [
+          "XHTML"
+        ]
       }
     ],
     "commands": [
@@ -243,6 +247,11 @@
         "command": "mm43.db.deleteResource",
         "title": "MM43: Eliminar Recurso JDBC",
         "icon": "$(trash)"
+      },
+      {
+        "command": "mm43.xhtml.clearCache",
+        "title": "MM43: Limpiar Caché Faces / XHTML",
+        "icon": "$(refresh)"
       }
     ],
     "configuration": {
@@ -326,6 +335,68 @@
               }
             }
           }
+        },
+        "mm43.faces.facesVersion": {
+          "type": "string",
+          "default": "java-server-faces(1.0 - 2.2)",
+          "description": "Versión de JSF / Jakarta Faces para autocompletado y hover.",
+          "enum": [
+            "java-server-faces(1.0 - 2.2)",
+            "jakarta-server-faces(2.3 - 3.0)",
+            "jakarta-server-faces-4.0",
+            "jakarta-server-faces-4.1",
+            "jakarta-server-faces-5.0"
+          ]
+        },
+        "mm43.faces.primeVersion": {
+          "type": "string",
+          "default": "primefaces-12.0.0",
+          "description": "Versión de PrimeFaces para autocompletado y hover.",
+          "enum": [
+            "primefaces-8.0.0",
+            "primefaces-10.0.0",
+            "primefaces-11.0.0",
+            "primefaces-12.0.0",
+            "primefaces-13.0.0",
+            "primefaces-14.0.0",
+            "primefaces-15.0.0"
+          ]
+        },
+        "mm43.faces.primeExtVersion": {
+          "type": "string",
+          "default": "primefaces-extensions-12.0.0",
+          "description": "Versión de PrimeFaces Extensions.",
+          "enum": [
+            "primefaces-extensions-10.0.0",
+            "primefaces-extensions-11.0.0",
+            "primefaces-extensions-12.0.0",
+            "primefaces-extensions-13.0.0",
+            "primefaces-extensions-14.0.0",
+            "primefaces-extensions-15.0.0"
+          ]
+        },
+        "mm43.faces.omniVersion": {
+          "type": "string",
+          "default": "omnifaces-3.0",
+          "description": "Versión de OmniFaces.",
+          "enum": [
+            "omnifaces-3.0",
+            "omnifaces-4.0",
+            "omnifaces-5.0"
+          ]
+        },
+        "mm43.faces.richVersion": {
+          "type": "string",
+          "default": "richfaces-4.5.17",
+          "description": "Versión de RichFaces.",
+          "enum": [
+            "richfaces-4.5.17"
+          ]
+        },
+        "mm43.faces.elDiagnostics": {
+          "type": "boolean",
+          "default": true,
+          "description": "Habilitar diagnósticos automáticos en expresiones EL (#{...})."
         }
       }
     },

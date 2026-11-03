@@ -23,13 +23,7 @@ import { ServerValidator } from './modules/server/ServerValidator';
 import { BeanRegistry } from './modules/AI/BeanRegistry';
 import { BeanScanner } from './modules/AI/BeanScanner';
 import { BeanDefinitionProvider } from './modules/AI/BeanDefinitionProvider';
-import { NamespacerRegistry } from "./modules/xhtml/registry/NamespaceRegistry";
-import { XhtmlHoverProvider } from "./modules/xhtml/provider/XhtmlHoverProvider";
-import { XhtmlCompletionProvider } from "./modules/xhtml/provider/XhtmlCompletionProvider";
-import { ElCompletionProvider } from "./modules/xhtml/provider/ElCompletionProvider";
-import { ElHoverProvider } from "./modules/xhtml/provider/ElHoverProvider";
-import { ElDiagnosticProvider } from "./modules/xhtml/provider/ElDiagnosticProvider";
-import { ElRenameProvider } from "./modules/xhtml/provider/ElRenameProvider";
+import { activateFacesIntellisense } from './modules/IntellisenseSupport/FacesIntellisense';
 
 let globalServerManager: ServerManager | undefined;
 
@@ -863,7 +857,7 @@ export async function activate(context: vscode.ExtensionContext) {
     // assetWatcher.startAll(); se eliminó la llamada redundante aquí
 
     const beanRegistry = await setupBeanIndex(context);
-    setupFacesIntellisense(context, beanRegistry);
+    activateFacesIntellisense(context, beanRegistry);
 
     const vcWorkspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
     if (vcWorkspaceRoot) {
@@ -918,44 +912,6 @@ export async function activate(context: vscode.ExtensionContext) {
         }
     }
     Logger.debug('DEBUG', 'Activación de MM43 completada.');
-}
-
-function setupFacesIntellisense(contexto: vscode.ExtensionContext, beanRegistry: BeanRegistry): void {
-    const pathDeContexto = contexto.extensionPath;
-    
-    const registry = new NamespacerRegistry(pathDeContexto);
-    const proveedorDeAutocompletado = new XhtmlCompletionProvider(registry);
-    const proveedorDeHover = new XhtmlHoverProvider(registry);
-
-    // Proveedores EL (integración con módulo AI)
-    const elCompletion = new ElCompletionProvider(beanRegistry);
-    const elHover = new ElHoverProvider(beanRegistry);
-    //const elDiagnostics = new ElDiagnosticProvider(beanRegistry);
-    const elRename = new ElRenameProvider(beanRegistry);
-
-    // registros
-    const xhtmlSelector: vscode.DocumentSelector = [
-        { language: 'html', pattern: '**/*.xhtml' }
-    ]
-
-    contexto.subscriptions.push(
-        vscode.languages.registerCompletionItemProvider(xhtmlSelector, proveedorDeAutocompletado, ':'),
-        vscode.languages.registerCompletionItemProvider(xhtmlSelector, elCompletion, '#', '.'),
-        vscode.languages.registerHoverProvider(xhtmlSelector, elHover),
-        vscode.languages.registerHoverProvider(xhtmlSelector, proveedorDeHover),
-        vscode.languages.registerRenameProvider(xhtmlSelector, elRename),
-        //elDiagnostics
-    )
-
-    //comando para limpiar cache
-    contexto.subscriptions.push(
-        vscode.commands.registerCommand('mm43.xhtml.clearCache', () => {
-            registry.limpiarCache();
-            Logger.info('XHTML', 'Caché limpiada');
-        })
-    )
-    Logger.info('XHTML', 'Faces Intellisense + EL Integration cargado.');
-    
 }
 
 export async function setupVersionControl(

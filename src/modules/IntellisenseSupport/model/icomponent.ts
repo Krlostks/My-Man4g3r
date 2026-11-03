@@ -1,7 +1,8 @@
-import { IAttribute } from ".";
+import { IAttribute } from "./iattribute";
 
 export interface IComponent {
-    description: string;
+    description?: string;
     name: string;
-    attribute: IAttribute[];
+    /** Según el JSON puede venir como arreglo o como objeto único. */
+    attribute?: IAttribute[] | IAttribute;
 }

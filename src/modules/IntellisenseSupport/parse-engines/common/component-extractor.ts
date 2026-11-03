@@ -2,29 +2,29 @@ import { ComponentDefinition } from "../../common";
 import { Component, IComponent } from "../../model";
 
 export default class ComponentExtractor {
-  /**
-   * @description Extracts components and attributes from JSON Primefaces
-   */
-  public static extract(textJson: string): ComponentDefinition[] {
-    const definitions: ComponentDefinition[] = [];
-    const jsonComps = <IComponent[]>JSON.parse(textJson);
-    const components: Component[] = [];
-
-    jsonComps.forEach((jsonComp) => {
-      const component = new Component(jsonComp.description, jsonComp.name);
-      if (typeof jsonComp.attribute !== "undefined") {
-        if (jsonComp.attribute.length > 0) {
-          jsonComp.attribute.forEach((jsonAtt) => {
-            component.addAtribute(jsonAtt.description, jsonAtt.name, jsonAtt.required, jsonAtt.type);
-          });
-        } else {
-          const attComp: any = jsonComp.attribute;
-          component.addAtribute(attComp.description, attComp.name, attComp.required, attComp.type);
+    /**
+     * Convierte el nodo `components.component` del JSON en definiciones.
+     * Acepta arreglo u objeto único, y normaliza `attribute` (arreglo/objeto) y `required` ("true"/true).
+     */
+    public static extract(raw: IComponent[] | IComponent | undefined | null): ComponentDefinition[] {
+        if (!raw) {
+            return [];
         }
-      }
-      components.push(component);
-      definitions.push(new ComponentDefinition(component));
-    });
-    return definitions;
-  }
+        const list = Array.isArray(raw) ? raw : [raw];
+        return list.map((jsonComp) => {
+            const component = new Component(jsonComp.description ?? "", jsonComp.name ?? "");
+            const attrs = jsonComp.attribute
+                ? (Array.isArray(jsonComp.attribute) ? jsonComp.attribute : [jsonComp.attribute])
+                : [];
+            for (const attr of attrs) {
+                component.addAtribute(
+                    attr.description ?? "",
+                    attr.name ?? "",
+                    attr.required === true || attr.required === "true",
+                    attr.type ?? ""
+                );
+            }
+            return new ComponentDefinition(component);
+        });
+    }
 }

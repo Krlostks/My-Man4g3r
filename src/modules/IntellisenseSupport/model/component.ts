@@ -1,4 +1,4 @@
-import { Attribute } from ".";
+import { Attribute } from "./attribute";
 
 export class Component {
     public description: string = "";
