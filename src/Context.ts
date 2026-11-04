@@ -64,7 +64,16 @@ export async function activate(context: vscode.ExtensionContext) {
     const assetWatcher = new AssetWatcher(() => serverManager.getServerState() === 'running');
     serverManager.setAssetWatcher(assetWatcher);
     const cacheCleaner = new CacheCleaner();
-    const mavenManager = new MavenManager(globalServerManager);
+        const mavenManager = new MavenManager(globalServerManager);
+    AgenteHotReloadManager.configure(mavenManager, globalServerManager, context);
+    const serverConfig = ConfigManager.getServerConfig();
+    if (serverConfig.serverPath && serverConfig.domain) {
+        try {
+            await serverManager.checkServerStatus();
+        } catch (error) {
+            Logger.warn('SERVER', `No se pudo determinar el estado inicial: ${String(error)}`);
+        }
+    }
     const agente = new AgenteHotReloadManager();
 
     const databaseProvider = new DatabaseProvider();
@@ -318,8 +327,11 @@ export async function activate(context: vscode.ExtensionContext) {
                 if (!selected) { return; }
                 project = selected.project;
             }
-            Logger.debug('DEBUG', `Reiniciando servidor con redeploy para: ${project.name}`);
-            serverManager.fullRedeploy(project);
+                        Logger.debug('DEBUG', `Iniciando redeploy controlado para: ${project.name}`);
+            const success = await AgenteHotReloadManager.redeployProject(project);
+            if (success) {
+                await serverProvider.refreshDeployedApps();
+            }
         }),
 
         vscode.commands.registerCommand('mm43.showServerLogs', () => {

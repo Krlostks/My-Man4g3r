@@ -162,7 +162,10 @@ export interface FlattenResult {
     message: string;
 }
 
-export type AgentMode = 'none' | 'basic' | 'dcevm';
+export type AgentMode = 'none' | 'standard' | 'basic' | 'dcevm';
+export type StructuralChangeBehavior = 'auto-redeploy' | 'confirm' | 'notify';
+export type ReloadFailureFallback = 'auto-redeploy' | 'none';
+
 
 export interface AgentConfig {
     agentPath: string;

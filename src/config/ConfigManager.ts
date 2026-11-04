@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
-import { ProjectConfig, ServerConfig } from './types';
+import { AgentMode, ProjectConfig, ServerConfig, ReloadFailureFallback, StructuralChangeBehavior } from './types';
 
 const SECTION = 'mm43';
 
@@ -140,16 +140,37 @@ export class ConfigManager {
         return undefined;
     }
 
-    static getHotReloadPort(): number {
+            static getHotReloadPort(): number {
         return vscode.workspace.getConfiguration(SECTION).get<number>('hotReloadPort', 9999);
+    }
+
+    static getMavenTool(): 'auto' | 'mvn' | 'mvnd' | 'wrapper' | 'custom' {
+        return vscode.workspace.getConfiguration(SECTION).get<'auto' | 'mvn' | 'mvnd' | 'wrapper' | 'custom'>('mavenTool', 'auto');
+    }
+
+    static getMavenPath(): string {
+        return vscode.workspace.getConfiguration(SECTION).get<string>('mavenPath', '')
+            .trim()
+            .replace(/[\r\n]/g, '');
+    }
+
+    static getStructuralChangeBehavior(): StructuralChangeBehavior {
+        const value = vscode.workspace.getConfiguration(SECTION).get<string>('structuralChangeBehavior', 'auto-redeploy');
+        return value === 'confirm' || value === 'notify' ? value : 'auto-redeploy';
+    }
+
+    static getReloadFailureFallback(): ReloadFailureFallback {
+        const value = vscode.workspace.getConfiguration(SECTION).get<string>('reloadFailureFallback', 'auto-redeploy');
+        return value === 'none' ? 'none' : 'auto-redeploy';
     }
 
     static getAgentPath(): string {
         return vscode.workspace.getConfiguration(SECTION).get<string>('agentPath', '');
     }
 
-    static getAgentMode(): string {
-        return vscode.workspace.getConfiguration(SECTION).get<string>('agentMode', 'none');
+        static getAgentMode(): AgentMode {
+        const mode = vscode.workspace.getConfiguration(SECTION).get<string>('agentMode', 'none');
+        return mode === 'basic' || mode === 'standard' || mode === 'dcevm' ? mode : 'none';
     }
 
     static async setAgentPath(agentPath: string): Promise<void> {
@@ -157,7 +178,7 @@ export class ConfigManager {
         await config.update('agentPath', agentPath, vscode.ConfigurationTarget.Workspace);
     }
 
-    static async setAgentMode(mode: string): Promise<void> {
+    static async setAgentMode(mode: AgentMode): Promise<void> {
         const config = vscode.workspace.getConfiguration(SECTION);
         await config.update('agentMode', mode, vscode.ConfigurationTarget.Workspace);
     }

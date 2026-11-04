@@ -20,11 +20,9 @@ export class MavenManager {
     async buildExploded(project: ProjectConfig, skipTests = true): Promise<boolean> {
         Logger.debug('DEBUG', `buildExploded: ${project.name}`);
         const props: Record<string, string> = skipTests ? { 'skipTests': 'true' } : {};
-        Logger.info('SERVER', 'se consultará el estado del servidor')
-        const result = this.serverManager.getServerState()
-        console.log("cd essssss:" + result);
-        if (result == "stopped") {
-            console.log("el servidor esta detenido se va a ejecutar un clean, compile y war:exploded");
+        Logger.info('SERVER', 'Se consultará el estado del servidor');
+        const result = this.serverManager.getServerState();
+        if (result === 'stopped') {
 
             return this._runCmd(new MavenComand(
                 `${project.name}-build-exploded`,
@@ -62,6 +60,89 @@ export class MavenManager {
             [],
             project.rootPath
         ), `Clean Install: ${project.name}`);
+    }
+
+    /**
+     * Compilación incremental para los flujos de hot reload.
+     * No limpia ni instala dependencias.
+     */
+    async compileIncremental(project: ProjectConfig, skipTests = true): Promise<boolean> {
+        Logger.debug('DEBUG', `compileIncremental: ${project.name}`);
+        const props: Record<string, string> = skipTests ? { skipTests: 'true' } : {};
+
+        return this._runCmd(new MavenComand(
+            `${project.name}-compile-incremental`,
+            `Compile Incremental: ${project.name}`,
+            ['compile'],
+            props,
+            [],
+            project.rootPath
+        ), `Compile Incremental: ${project.name}`);
+    }
+
+    /**
+     * Compila y sincroniza las clases en el WAR exploded sin ejecutar
+     * nuevamente el empaquetado completo.
+     */
+    async buildExplodedIncremental(project: ProjectConfig, skipTests = true): Promise<boolean> {
+        const compiled = await this.compileIncremental(project, skipTests);
+        return compiled && this.syncExplodedClasses(project);
+    }
+
+    /**
+     * Copia target/classes al directorio WEB-INF/classes del WAR exploded.
+     * También elimina clases obsoletas para evitar que el servidor cargue
+     * bytecode eliminado del proyecto.
+     */
+    async syncExplodedClasses(project: ProjectConfig): Promise<boolean> {
+        const source = path.join(project.rootPath, 'target', 'classes');
+        const destination = path.join(
+            project.rootPath, 'target', project.warName, 'WEB-INF', 'classes'
+        );
+
+        try {
+            if (!fs.existsSync(source) || !fs.statSync(source).isDirectory()) {
+                Logger.error('MAVEN', `No existe el directorio de clases compiladas: ${source}`);
+                return false;
+            }
+
+            this.syncDirectory(source, destination);
+            Logger.info('MAVEN', `Clases sincronizadas: ${source} -> ${destination}`);
+            return true;
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            Logger.error('MAVEN', `No se pudieron sincronizar las clases: ${message}`);
+            return false;
+        }
+    }
+
+    private syncDirectory(source: string, destination: string): void {
+        if (fs.existsSync(destination) && !fs.lstatSync(destination).isDirectory()) {
+            fs.rmSync(destination, { force: true });
+        }
+        fs.mkdirSync(destination, { recursive: true });
+        const sourceEntries = new Set(fs.readdirSync(source));
+
+        for (const entry of sourceEntries) {
+            const sourcePath = path.join(source, entry);
+            const destinationPath = path.join(destination, entry);
+            const sourceStat = fs.lstatSync(sourcePath);
+
+            if (sourceStat.isDirectory()) {
+                this.syncDirectory(sourcePath, destinationPath);
+            } else if (sourceStat.isFile()) {
+                if (fs.existsSync(destinationPath) && fs.lstatSync(destinationPath).isDirectory()) {
+                    fs.rmSync(destinationPath, { recursive: true, force: true });
+                }
+                fs.copyFileSync(sourcePath, destinationPath);
+            }
+        }
+
+        for (const entry of fs.readdirSync(destination)) {
+            if (!sourceEntries.has(entry)) {
+                fs.rmSync(path.join(destination, entry), { recursive: true, force: true });
+            }
+        }
     }
 
     /**

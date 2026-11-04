@@ -1,8 +1,9 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
-import * as childProcess from 'child_process';
 import { CommandResult, ICommand } from "../../config/types";
 import { Logger } from '../logger/Logger';
+import { ProcessRunner } from '../process/ProcessRunner';
+import { MavenToolResolver } from './MavenToolResolver';
 
 export class MavenComand implements ICommand {
     constructor(
@@ -37,11 +38,12 @@ export class MavenComand implements ICommand {
      */
     toTask(): vscode.Task {
         const args = this.buildArgs();
-
-        // Definimos la ejecución en el shell
-        const execution = new vscode.ShellExecution('mvnd', args, {
-            cwd: this.workingDir ?? (vscode.workspace.workspaceFolders?.[0]?.uri.fsPath)
-        });
+        const executable = MavenToolResolver.resolve(this.workingDir);
+        const execution = new vscode.ProcessExecution(
+            executable.command,
+            [...executable.argsPrefix, ...args],
+            { cwd: this.workingDir ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath }
+        );
 
         // Instanciamos el Task
         const task = new vscode.Task(
@@ -67,7 +69,7 @@ export class MavenComand implements ICommand {
      * Valida si el directorio de trabajo existe antes de ejecutar.
      */
     async validate(): Promise<boolean> {
-        if (this.workingDir && !fs.existsSync(this.workingDir)) {
+        if (this.workingDir && (!fs.existsSync(this.workingDir) || !fs.statSync(this.workingDir).isDirectory())) {
             return false;
         }
         return true;
@@ -78,39 +80,37 @@ export class MavenComand implements ICommand {
      * Envía los logs en tiempo real al Logger centralizado.
      */
     async execute(): Promise<CommandResult> {
-        const argsString = this.buildArgs().join(' ');
-        const fullCommand = `mvnd ${argsString}`;
+        try {
+            const executable = MavenToolResolver.resolve(this.workingDir);
+            const args = [...executable.argsPrefix, ...this.buildArgs()];
+            const displayCommand = [executable.command, ...args].join(' ');
+            const cwd = this.workingDir ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
 
-        const options: childProcess.ExecOptions = {
-            cwd: this.workingDir ?? (vscode.workspace.workspaceFolders?.[0]?.uri.fsPath)
-        };
+            Logger.info('MAVEN', `Usando ${executable.source}: ${displayCommand}`);
+            Logger.show();
 
-        Logger.info('MAVEN', `Ejecutando: ${fullCommand}`);
-        Logger.show();
-
-        return new Promise((resolve) => {
-            const child = childProcess.exec(fullCommand, options, (error: childProcess.ExecException | null, stdout: string | Buffer, stderr: string | Buffer) => {
-                if (error) {
-                    resolve({
-                        success: false,
-                        salida: stdout.toString(),
-                        error: (stderr ? stderr.toString() : error.message)
-                    });
-                } else {
-                    resolve({
-                        success: true,
-                        salida: stdout.toString()
-                    });
-                }
+            const result = await ProcessRunner.run(executable.command, args, {
+                cwd,
+                timeout: 180000,
+                onStdout: data => Logger.raw(data),
+                onStderr: data => Logger.raw(data),
             });
 
-            // Enviar logs en tiempo real al Logger centralizado
-            child.stdout?.on('data', (data: Buffer | string) => {
-                Logger.raw(data.toString());
-            });
-            child.stderr?.on('data', (data: Buffer | string) => {
-                Logger.raw(data.toString());
-            });
-        });
+            if (result.code === 0) {
+                return { success: true, salida: result.stdout };
+            }
+
+            const reason = result.timedOut
+                ? 'Maven excedió el tiempo máximo de ejecución.'
+                : result.cancelled
+                    ? 'La ejecución de Maven fue cancelada.'
+                    : result.stderr || `Maven terminó con código ${result.code}`;
+            Logger.error('MAVEN', reason);
+            return { success: false, salida: result.stdout, error: reason };
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            Logger.error('MAVEN', message);
+            return { success: false, salida: '', error: message };
+        }
     }
 }

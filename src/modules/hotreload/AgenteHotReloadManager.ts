@@ -1,3 +1,5 @@
+
+
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
@@ -7,17 +9,32 @@ import { spawn, ChildProcess } from 'child_process';
 import { ProjectConfig } from '../../config/types';
 import { ConfigManager } from '../../config/ConfigManager';
 import { Logger } from '../logger/Logger';
-import { HotReloadClient } from './HotReloadClient';
 import { DcevmValidator } from './DcevmValidator';
+import { createReloadStrategy, ReloadChangeType } from './ReloadStrategy';
+
+import type { MavenManager } from '../maven/MavenManager';
+import type { ServerManager } from '../server/ServerManager';
+import { RedeployService } from '../server/RedeployService';
+import { ProcessRunner } from '../process/ProcessRunner';
+import { JavaChangeAnalyzer } from './JavaChangeAnalyzer';
 
 type ChangeType = 'local' | 'external' | 'structural' | 'unknown';
 type CompilacionPrioridad = 'high' | 'normal' | 'low';
 
 interface FileMetadata {
+    absolutePath: string;
     mtime: number;
     size: number;
     contentHash: string;
+    signatureHash?: string;
+    classHash?: string;
     lastCompilation?: number;
+    lastSuccessfulCompile?: number;
+    lastSuccessfulReload?: number;
+}
+
+interface PersistedFileMetadata extends FileMetadata {
+    source?: string;
 }
 
 interface CompilacionJob {
@@ -28,6 +45,7 @@ interface CompilacionJob {
     intentos: number;
     timestamp: number;
     changeType: ChangeType;
+    revision: number;
     resolve: (success: boolean) => void;
     reject: (error: Error) => void;
 }
@@ -45,7 +63,7 @@ const MAX_RETRIES = 3;
 const RETRY_DELAY_BASE = 1000;
 const BATCH_SIZE = 5;
 const FILE_WATCH_DEBOUNCE = 300;
-const EXTERNAL_CHANGE_THRESHOLD_MS = 3000;
+
 
 
 export class AgenteHotReloadManager {
@@ -57,6 +75,7 @@ export class AgenteHotReloadManager {
     private static workerPromise: Promise<void> | null = null;
 
     private static fileMetadataCache: Map<string, FileMetadata> = new Map();
+    private static sourceSnapshotCache: Map<string, string> = new Map();
 
     private static dependenciaCache: Map<string, Set<string>> = new Map();
     private static reverseDependenciaCache: Map<string, Set<string>> = new Map();
@@ -66,14 +85,60 @@ export class AgenteHotReloadManager {
     private static THRESHOLD = 50;    
     private static isPaused: boolean = false;
     private static lastHashes: Map<string, string> = new Map();
-    private static activeStatusMessages: Map<string, vscode.Disposable> = new Map();
+    private static fileRevisions: Map<string, number> = new Map();
+    private static cacheState?: vscode.Memento;
+    private static readonly CACHE_KEY = 'mm43.hotReload.fileCache';
+        private static activeStatusMessages: Map<string, vscode.Disposable> = new Map();
+    private static mavenManager?: MavenManager;
+        private static serverManager?: ServerManager;
+    private static redeployService?: RedeployService;
+
+            static configure(mavenManager: MavenManager, serverManager: ServerManager, context?: vscode.ExtensionContext): void {
+        this.mavenManager = mavenManager;
+        this.serverManager = serverManager;
+        this.redeployService = new RedeployService(serverManager, mavenManager);
+        this.cacheState = context?.workspaceState;
+        const persisted = context?.workspaceState.get<Record<string, PersistedFileMetadata>>(this.CACHE_KEY, {}) ?? {};
+        for (const [file, metadata] of Object.entries(persisted)) {
+            this.fileMetadataCache.set(file, metadata);
+            if (metadata.source !== undefined) {
+                this.sourceSnapshotCache.set(file, metadata.source);
+            }
+        }
+    }
+
+    private static persistFileMetadata(file: string): void {
+        if (!this.cacheState) { return; }
+        const metadata = this.fileMetadataCache.get(file);
+        if (!metadata) { return; }
+        const all = this.cacheState.get<Record<string, PersistedFileMetadata>>(this.CACHE_KEY, {});
+        void this.cacheState.update(this.CACHE_KEY, {
+            ...all,
+            [file]: { ...metadata, source: this.sourceSnapshotCache.get(file) },
+        });
+    }
+
+    static async redeployProject(project: ProjectConfig): Promise<boolean> {
+        // Un redeploy solicitado desde UI o desde la cola masiva debe esperar
+        // a que termine cualquier trabajo HotSwap/compilación activo.
+        if (this.workerPromise) {
+            await this.workerPromise;
+        }
+        if (!this.redeployService) {
+            Logger.error('HOTRELOAD', 'No hay RedeployService configurado.');
+            return false;
+        }
+        const result = await this.redeployService.redeploy(project);
+        return result.success;
+    }
 
     constructor() { }
 
     static setPaused(paused: boolean): void {
         Logger.debug('DEBUG', `setPaused invocado (paused: ${paused})`);
         this.isPaused = paused;
-        if (paused) {
+                if (paused) {
+            this.cancelPendingChanges();
             Logger.info('HOTRELOAD', '⏸ Watcher pausado temporalmente.');
         } else {
             Logger.info('HOTRELOAD', '▶ Watcher reanudado.');
@@ -99,9 +164,11 @@ export class AgenteHotReloadManager {
             Logger.error('HOTRELOAD', `Error calculando hash para ${filename}: ${e}`);
         }
 
+                const revision = (this.fileRevisions.get(javaAbsPath) ?? 0) + 1;
+        this.fileRevisions.set(javaAbsPath, revision);
         this.mostrarSpinner(javaAbsPath);
 
-        this.changeQueue.push({ filename, project });        
+        this.changeQueue.push({ filename: javaAbsPath, project });        
         if (this.processTimer) { clearTimeout(this.processTimer); }
 
         this.processTimer = setTimeout(() => {
@@ -126,11 +193,18 @@ export class AgenteHotReloadManager {
             );
 
             if (choice === 'Redeploy Completo') {
-                queue.forEach(item => {
+                                queue.forEach(item => {
                     const javaAbsPath = path.isAbsolute(item.filename) ? item.filename : path.join(item.project.rootPath, 'src', 'main', 'java', item.filename);
                     this.removerSpinner(javaAbsPath);
                 });
-                vscode.commands.executeCommand('mm43.restartServer');
+                const projects = new Map(queue.map(item => [item.project.rootPath, item.project]));
+                if (!this.redeployService) {
+                    Logger.error('HOTRELOAD', 'No hay RedeployService configurado para el redeploy masivo.');
+                    return;
+                }
+                                for (const project of projects.values()) {
+                    await this.redeployProject(project);
+                }
                 return;
             } else if (!choice) {
                 queue.forEach(item => {
@@ -141,8 +215,14 @@ export class AgenteHotReloadManager {
             }
         }
 
-        const uniqueFiles = new Map<string, { filename: string, project: ProjectConfig }>();
-        queue.forEach(q => uniqueFiles.set(`${q.project.name}:${q.filename}`, q));
+                const uniqueFiles = new Map<string, { filename: string, project: ProjectConfig }>();
+        // Conserva únicamente el último evento de cada archivo dentro del debounce.
+        queue.forEach(q => {
+            const absolute = path.isAbsolute(q.filename)
+                ? q.filename
+                : path.join(q.project.rootPath, 'src', 'main', 'java', q.filename);
+            uniqueFiles.set(`${q.project.rootPath}:${absolute}`, { ...q, filename: absolute });
+        });
 
         Logger.info('HOTRELOAD', `Procesando cola de recarga (${uniqueFiles.size} archivos únicos)...`);
 
@@ -152,19 +232,29 @@ export class AgenteHotReloadManager {
     }
 
     private static async colaDeCompilacion(javaFile: string, project: ProjectConfig, prioridad: CompilacionPrioridad = 'normal'):Promise<boolean>{        
-        return new Promise((resolve, reject)=>{
+                return new Promise((resolve, reject)=>{
+            const revision = this.fileRevisions.get(javaFile) ?? 0;
             const job:CompilacionJob ={
                 id:`${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
                 javaFile,
                 project,
                 prioridad,
                 intentos:0,
-                timestamp:Date.now(),
+                                timestamp:Date.now(),
                 changeType:'unknown',
+                revision,
                 resolve,
                 reject
             };
 
+                        const existingIndex = this.compilationQueue.findIndex(candidate =>
+                candidate.project.rootPath === project.rootPath && candidate.javaFile === javaFile
+            );
+            if (existingIndex >= 0) {
+                const previous = this.compilationQueue.splice(existingIndex, 1)[0];
+                previous.resolve(false);
+                this.removerSpinner(previous.javaFile);
+            }
             this.compilationQueue.push(job);
             this.compilationQueue.sort((a, b) => {
                 const pOrder = { high: 0, normal: 1, low: 2 };
@@ -176,22 +266,22 @@ export class AgenteHotReloadManager {
 
             if (!this.isWorkerRunning || !this.workerPromise) {
                 this.workerPromise = this.runCompilationWorker();
-            }
-        })
+                        }
+        });
     }
 
     private static async runCompilationWorker(): Promise<void> {
         this.isWorkerRunning = true;
         Logger.debug('DEBUG', 'CompilationWorker iniciado');
 
-        while (this.compilationQueue.length > 0) {
-            const batch = this.compilationQueue.splice(0, BATCH_SIZE);
-            
-            // Ejecutar batch en paralelo
-            const promises = batch.map(job => this.ejecutarJob(job));
-            await Promise.allSettled(promises);
-
-            // Limpiar servidores inactivos
+                while (this.compilationQueue.length > 0) {
+            // Una sola operación por vez evita compilar y redesplegar el mismo
+            // proyecto simultáneamente. Los nuevos eventos se acumulan para la
+            // siguiente iteración y se deduplican en procesarCola().
+            const job = this.compilationQueue.shift();
+            if (job) {
+                await this.ejecutarJob(job);
+            }
             this.limpiarServidoresInactivos();
         }
 
@@ -201,7 +291,13 @@ export class AgenteHotReloadManager {
     }
 
     private static async ejecutarJob(job: CompilacionJob): Promise<void> {
-        try {
+                try {
+            if (!this.isCurrentRevision(job)) {
+                job.resolve(false);
+                this.removerSpinner(job.javaFile);
+                return;
+            }
+
             job.intentos++;
 
             // 1. Analizar tipo de cambio
@@ -209,35 +305,54 @@ export class AgenteHotReloadManager {
                 job.changeType = await this.analizarTipoCambio(job.javaFile, job.project);
             }            
 
-            // 2. Ejecutar estrategia segun tipo
+                                    // 2. Compilar y aplicar la estrategia correspondiente.
+            // El modo none no compila ni intenta conectar con el agente.
+            const reloadStrategy = createReloadStrategy();
+            if (reloadStrategy.name === 'Sin recarga') {
+                Logger.info('HOTRELOAD', `Recarga omitida: ${job.javaFile}`);
+                this.removerSpinner(job.javaFile, 'HotSwap deshabilitado', 3000);
+                job.resolve(true);
+                return;
+            }
+
+            // El job solo se resuelve cuando termina también HotSwap/redeploy.
             let success = false;
             switch (job.changeType) {
                 case 'external':
-                    success = await this.compilarConServidor(job.javaFile, job.project);
-                    if (!success) {
-                        success = await this.compilarModuloCompleto(job.javaFile, job.project);
+                                        success = await this.compilarParaHotReload(job.javaFile, job.project);
+                    if (success) {
+                        success = await this.aplicarHotSwapConFallback(job.javaFile, job.project);
                     }
                     break;
                 case 'structural':
-                    success = await this.compilarConAnalisisEstructural(job.javaFile, job.project);
+                    success = await this.procesarCambioEstructural(job.javaFile, job.project);
                     break;
                 case 'local':
                 default:
-                    success = await this.compilarConServidor(job.javaFile, job.project);
+                                        success = await this.compilarParaHotReload(job.javaFile, job.project);
+                    if (success) {
+                        success = await this.aplicarHotSwapConFallback(job.javaFile, job.project);
+                    }
                     break;
             }
 
             if (success) {
+                this.commitSnapshot(job.javaFile, job.project);
                 job.resolve(true);
-                await this.enviarHotswap(job.javaFile, job.project);
             } else if (job.intentos < MAX_RETRIES) {
                 // Retry con delay exponencial
                 const delay = RETRY_DELAY_BASE * Math.pow(2, job.intentos - 1);
                 Logger.debug('DEBUG', `Retry ${job.intentos}/${MAX_RETRIES} en ${delay}ms`);
-                await this.delay(delay);
-                this.compilationQueue.unshift(job);
+                                await this.delay(delay);
+                if (this.isCurrentRevision(job)) {
+                    this.compilationQueue.unshift(job);
+                } else {
+                    job.resolve(false);
+                    this.removerSpinner(job.javaFile);
+                }
             } else {
                 Logger.error('HOTRELOAD', `Falló tras ${MAX_RETRIES} intentos: ${job.javaFile}`);
+                this.lastHashes.delete(job.javaFile);
                 job.resolve(false);
                 const basename = path.basename(job.javaFile, '.java');
                 this.removerSpinner(job.javaFile, `Hotswap ❌ : ${basename}`, 3000);
@@ -251,76 +366,106 @@ export class AgenteHotReloadManager {
         }
     }
 
-    private static async analizarTipoCambio(javaFile: string, project: ProjectConfig): Promise<ChangeType> {
+        private static async analizarTipoCambio(javaFile: string, _project: ProjectConfig): Promise<ChangeType> {
         let stats: fs.Stats;
+        let currentContent: string;
         try {
             stats = fs.statSync(javaFile);
+            currentContent = fs.readFileSync(javaFile, 'utf8');
         } catch {
             return 'unknown';
         }
 
-        const cached = this.fileMetadataCache.get(javaFile);
-        const now = Date.now();
-        const mtime = stats.mtimeMs;
+        const previousContent = this.sourceSnapshotCache.get(javaFile);
+        const currentHash = await this.hashFile(javaFile);
+                const previousMetadata = this.fileMetadataCache.get(javaFile);
+        this.fileMetadataCache.set(javaFile, {
+            absolutePath: javaFile,
+            mtime: stats.mtimeMs,
+            size: stats.size,
+            contentHash: currentHash,
+            signatureHash: JavaChangeAnalyzer.createSnapshot(currentContent).structureHash,
+            classHash: previousMetadata?.classHash,
+            lastCompilation: previousMetadata?.lastCompilation,
+            lastSuccessfulCompile: previousMetadata?.lastSuccessfulCompile,
+            lastSuccessfulReload: previousMetadata?.lastSuccessfulReload,
+        });
+        this.persistFileMetadata(javaFile);
 
-        if (!cached) {
-            this.fileMetadataCache.set(javaFile, {
-                mtime,
-                size: stats.size,
-                contentHash: await this.hashFile(javaFile)
-            });
+        // El primer evento solo establece la línea base; no existe contenido anterior
+        // contra el cual comparar la estructura.
+        if (previousContent === undefined) {
+            this.sourceSnapshotCache.set(javaFile, currentContent);
+            this.persistFileMetadata(javaFile);
+            Logger.debug('DEBUG', `Snapshot inicial creado para ${path.basename(javaFile)}`);
             return 'local';
         }
 
-        const timeSinceLastChange = mtime - cached.mtime;
-        const sizeChanged = stats.size !== cached.size;
-
-        if (timeSinceLastChange < EXTERNAL_CHANGE_THRESHOLD_MS && sizeChanged) {
-            Logger.debug('DEBUG', `Cambio EXTERNAL detectado en ${path.basename(javaFile)}`);
-            return 'external';
+        const analysis = JavaChangeAnalyzer.analyze(previousContent, currentContent);
+        switch (analysis.kind) {
+            case 'structural':
+                Logger.info('HOTRELOAD', `Cambio STRUCTURAL detectado en ${path.basename(javaFile)}`);
+                return 'structural';
+            case 'method-body':
+                Logger.debug('DEBUG', `Cambio de cuerpo de método detectado en ${path.basename(javaFile)}`);
+                return 'local';
+            case 'unchanged':
+                return 'local';
+            default:
+                Logger.warn('HOTRELOAD', `No se pudo clasificar el cambio en ${path.basename(javaFile)}`);
+                return 'unknown';
         }
-
-        // Verificar si cambio es estructural
-        if (await this.esCambioEstructural(javaFile)) {
-            Logger.debug('DEBUG', `Cambio STRUCTURAL detectado en ${path.basename(javaFile)}`);
-            return 'structural';
-        }
-
-        // Verificar git status para cambios externos
-        if (await this.tieneCambiosGit(javaFile, project)) {
-            return 'external';
-        }
-
-        // Actualizar cache
-        this.fileMetadataCache.set(javaFile, {
-            ...cached,
-            mtime,
-            size: stats.size,
-            contentHash: await this.hashFile(javaFile)
-        });
-
-        return 'local';
     }
 
-    private static async tieneCambiosGit(javaFile: string, project: ProjectConfig): Promise<boolean> {
-        return new Promise((resolve) => {
-            const { exec } = require('child_process');
-            const relativePath = path.relative(project.rootPath, javaFile).replace(/\\/g, '/');
-            
-            // git status --porcelain devuelve info si el archivo cambio
-            exec(
-                `git status --porcelain "${relativePath}"`,
-                { cwd: project.rootPath, timeout: 5000 },
-                (error: any, stdout: string) => {
-                    if (error) {
-                        resolve(false);
-                        return;
-                    }
-                    // Si tiene contenido, cambio externo
-                    resolve(stdout.trim().length > 0);
-                }
-            );
-        });
+    
+
+    private static commitSnapshot(javaFile: string, project: ProjectConfig): void {
+        try {
+                        const source = fs.readFileSync(javaFile, 'utf8');
+            this.sourceSnapshotCache.set(javaFile, source);
+            const metadata = this.fileMetadataCache.get(javaFile);
+            if (metadata) {
+                const snapshot = JavaChangeAnalyzer.createSnapshot(source);
+                                const relative = path.relative(path.join(project.rootPath, 'src', 'main', 'java'), javaFile);
+                const classFile = path.join(project.rootPath, 'target', project.warName, 'WEB-INF', 'classes', relative.replace(/\.java$/, '.class'));
+                const classHash = fs.existsSync(classFile)
+                    ? crypto.createHash('sha256').update(fs.readFileSync(classFile)).digest('hex').substring(0, 16)
+                    : metadata.classHash;
+                this.fileMetadataCache.set(javaFile, {
+                    ...metadata,
+                    signatureHash: snapshot.structureHash,
+                    classHash,
+                    lastSuccessfulCompile: Date.now(),
+                    lastSuccessfulReload: Date.now(),
+                });
+            }
+            this.persistFileMetadata(javaFile);
+        } catch {
+            Logger.warn('HOTRELOAD', `No se pudo confirmar snapshot: ${javaFile}`);
+        }
+    }
+
+    private static isCurrentRevision(job: CompilacionJob): boolean {
+        return (this.fileRevisions.get(job.javaFile) ?? 0) === job.revision;
+    }
+
+    private static cancelPendingChanges(): void {
+        if (this.processTimer) {
+            clearTimeout(this.processTimer);
+            this.processTimer = undefined;
+        }
+        for (const item of this.changeQueue) {
+            const javaFile = path.isAbsolute(item.filename)
+                ? item.filename
+                : path.join(item.project.rootPath, 'src', 'main', 'java', item.filename);
+            this.removerSpinner(javaFile);
+        }
+        this.changeQueue = [];
+        for (const job of this.compilationQueue) {
+            job.resolve(false);
+            this.removerSpinner(job.javaFile);
+        }
+        this.compilationQueue = [];
     }
 
     private static async hashFile(filePath: string): Promise<string> {
@@ -332,28 +477,7 @@ export class AgenteHotReloadManager {
         }
     }
 
-    private static async esCambioEstructural(javaFile: string): Promise<boolean> {
-        try {
-            const content = fs.readFileSync(javaFile, 'utf8');
-            
-            // Patrones de cambio estructural
-            const structuralPatterns = [
-                /^\s*(public|private|protected)\s+(static\s+)?(final\s+)?\w+\s+\w+\s*\(/m,
-                /^\s*import\s+[\w\.]+\s*;/m,
-                /^\s*@(Override|Deprecated|Singleton|Component|Service|Repository)\b/m,
-                /^\s*(public|protected)\s+\w+\s+\w+\s*\{/m,
-            ];
-
-            for (const pattern of structuralPatterns) {
-                if (pattern.test(content)) {
-                    return true;
-                }
-            }
-            return false;
-        } catch {
-            return false;
-        }
-    }
+    
     private static getServerKey(project: ProjectConfig): string {
         return `${project.name}__${project.rootPath}`;
     }
@@ -496,9 +620,9 @@ public class MM43CompilerServer {
         fs.writeFileSync(serverJava, serverCode, 'utf8');
 
         // Compilar el servidor con javac
-        const compileCmd = `"${jdkPath}" -d "${serverDir}" "${serverJava}"`;
-        Logger.debug('DEBUG', `Compilando servidor: ${compileCmd}`);
-        const compileResult = await this.execCommand(compileCmd, 30000);
+                const compileArgs = ['-d', serverDir, serverJava];
+        Logger.debug('DEBUG', `Compilando servidor: ${jdkPath} ${compileArgs.join(' ')}`);
+        const compileResult = await this.execProcess(jdkPath, compileArgs, 30000);
         if (compileResult.stderr) {
             Logger.debug('DEBUG', `javac stderr: ${compileResult.stderr}`);
         }
@@ -627,11 +751,10 @@ public class MM43CompilerServer {
         }
     }
 
-    private static async compilarConServidor(javaFile: string, project: ProjectConfig): Promise<boolean> {
-        // Usar javac directo: mas simple y confiable que servidor TCP persistente.
-        // El servidor TCP agrega latency de ~5 seg (compilar java, iniciar JVM, handshake)
-        // sin beneficio real para compilacion individual.
-        return this.compilarConJavac(javaFile, project);
+        private static async compilarConServidor(javaFile: string, project: ProjectConfig): Promise<boolean> {
+        // Compatibilidad con el nombre histórico: la compilación Maven ya no
+        // se ejecuta desde este gestor, sino mediante MavenManager.
+        return this.compilarParaHotReload(javaFile, project);
     }
     private static async obtenerServidor(project: ProjectConfig): Promise<CompilerServer> {
         const key = this.getServerKey(project);
@@ -674,73 +797,114 @@ public class MM43CompilerServer {
         }
     }
 
-    private static async compilarConJavac(javaFile: string, project: ProjectConfig): Promise<boolean> {
+        private static async compilarConJavac(javaFile: string, project: ProjectConfig): Promise<boolean> {
         const jdkPath = ConfigManager.getJdkPath();
         const outputDir = path.join(project.rootPath, 'target', project.warName, 'WEB-INF', 'classes');
-        const classpath = project.classpath;
-        const localClasses = outputDir;
-        const fullClasspath = `${localClasses};${classpath}`;
+        const classpath = project.classpath ?? '';
+        const fullClasspath = [outputDir, classpath].filter(Boolean).join(path.delimiter);
+        const tempDir = path.join(project.rootPath, 'target', 'temp');
 
-        return new Promise((resolve) => {
-            const { exec } = require('child_process');
-            const tempDir = path.join(project.rootPath, 'target', 'temp');
-            if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
-            
-            // Classpath puede superar el limite de linea de comandos de Windows (~8191 chars).
-            // Se usa un argfile (@archivo) soportado por javac desde JDK8. Se usan '/' para
-            // evitar problemas de escape de '\\' dentro de las comillas del argfile.
-            const toSlash = (p: string) => p.replace(/\\/g, '/');
-            const argFile = path.join(tempDir, `argfile_${Date.now()}.txt`);
-            const argContent = `-encoding UTF-8\n-g\n-parameters\n-cp "${toSlash(fullClasspath)}"\n-d "${toSlash(outputDir)}"\n"${toSlash(javaFile)}"\n`;
+        if (!fs.existsSync(tempDir)) { fs.mkdirSync(tempDir, { recursive: true }); }
+        if (!fs.existsSync(outputDir)) { fs.mkdirSync(outputDir, { recursive: true }); }
 
-            try {
-                fs.writeFileSync(argFile, argContent, 'utf8');
-                const cmd = `"${jdkPath}" @"${argFile}"`;
+        const toSlash = (value: string) => value.replace(/\\/g, '/');
+        const argFile = path.join(tempDir, `argfile_${Date.now()}.txt`);
+        const argContent = [
+            '-encoding UTF-8',
+            '-g',
+            '-parameters',
+            `-cp "${toSlash(fullClasspath)}"`,
+            `-d "${toSlash(outputDir)}"`,
+            `"${toSlash(javaFile)}"`,
+            '',
+        ].join('\n');
 
-                exec(cmd, { timeout: 30000 }, (error: any, stdout: string, stderr: string) => {
-                try { fs.unlinkSync(argFile); } catch {}
-                if (error) {
-                    console.log("el error es :" + error.message);
-                    console.log("el stderr es :" + stderr);
-                    console.log("el stdout es :" + stdout);
-                    
-                    if (stderr.includes('cannot find symbol')) {
-                        Logger.debug('DEBUG', 'Símbolo no encontrado, reintentando...');                        
-                        setTimeout(() => resolve(true), 500);
-                    } else {
-                        Logger.error('HOTRELOAD', `javac error: ${stderr}`);
-                        resolve(false);
-                    }
-                } else {
-                    resolve(true);
-                }
+        try {
+            fs.writeFileSync(argFile, argContent, 'utf8');
+            const result = await ProcessRunner.run(jdkPath, [`@${argFile}`], {
+                timeout: 30000,
+                onStdout: data => Logger.raw(data),
+                onStderr: data => Logger.raw(data),
             });
-            } catch (error) {
-                try { fs.unlinkSync(argFile); } catch {}
-                resolve(false);
-                console.log("error");
-                
+
+            if (result.code === 0) { return true; }
+            if (result.stderr.includes('cannot find symbol')) {
+                Logger.debug('DEBUG', 'Símbolo no encontrado, reintentando...');
+                await this.delay(500);
+                return true;
             }
-            // const cmd = `"${jdkPath}" -encoding UTF-8 -cp "${fullClasspath}" -d "${outputDir}" "${javaFile}"`;            
-            
-            // exec(cmd, { timeout: 30000 }, (error: any, stdout: string, stderr: string) => {
-            //     if (error) {
-            //         console.log("el error es :" + error.message);
-            //         console.log("el stderr es :" + stderr);
-            //         console.log("el stdout es :" + stdout);
-                    
-            //         if (stderr.includes('cannot find symbol')) {
-            //             Logger.debug('DEBUG', 'Símbolo no encontrado, reintentando...');                        
-            //             setTimeout(() => resolve(true), 500);
-            //         } else {
-            //             Logger.error('HOTRELOAD', `javac error: ${stderr}`);
-            //             resolve(false);
-            //         }
-            //     } else {
-            //         resolve(true);
-            //     }
-            // });
-        });
+
+            Logger.error('HOTRELOAD', `javac error: ${result.stderr || 'compilación fallida'}`);
+            return false;
+        } catch (error) {
+            Logger.error('HOTRELOAD', `Error ejecutando javac: ${error}`);
+            return false;
+        } finally {
+            try { fs.unlinkSync(argFile); } catch { /* archivo temporal ya eliminado */ }
+        }
+    }
+
+        private static async procesarCambioEstructural(javaFile: string, project: ProjectConfig): Promise<boolean> {
+            Logger.info('HOTRELOAD', `Procesando cambio estructural: ${path.basename(javaFile)}`);
+
+            const strategy = createReloadStrategy();
+                        const behavior = ConfigManager.getStructuralChangeBehavior();
+            if (behavior === 'notify') {
+                Logger.warn('HOTRELOAD', 'Cambio estructural detectado; no se aplicó recarga por configuración.');
+                vscode.window.showWarningMessage(`Cambio estructural en ${path.basename(javaFile)}. Se requiere redeploy.`);
+                return false;
+            }
+            if (behavior === 'confirm') {
+                const choice = await vscode.window.showWarningMessage(
+                    `Cambio estructural detectado en ${path.basename(javaFile)}.`,
+                    { modal: true }, 'Redeploy automático'
+                );
+                if (choice !== 'Redeploy automático') { return false; }
+            }
+            if (!strategy.supports('structural')) {
+                Logger.info('HOTRELOAD', 'La JVM estándar requiere build y redeploy.');
+                return this.ejecutarRedeploy(project);
+            }
+
+            const compiled = await this.compilarParaHotReload(javaFile, project);
+        if (!compiled) {
+            return false;
+        }
+
+        const result = await this.aplicarRecarga(javaFile, project, 'structural');
+        if (result.success) {
+            return true;
+        }
+                if (result.requiresRedeploy && ConfigManager.getReloadFailureFallback() === 'auto-redeploy') {
+            Logger.warn('HOTRELOAD', `${result.message} Se intentará redeploy.`);
+            return this.ejecutarRedeploy(project);
+        }
+        return false;
+    }
+
+    private static async ejecutarRedeploy(project: ProjectConfig): Promise<boolean> {
+        if (!this.serverManager) {
+            Logger.error('HOTRELOAD', 'No hay ServerManager configurado para ejecutar redeploy.');
+            return false;
+        }
+
+                try {
+            if (!this.redeployService) {
+                Logger.error('HOTRELOAD', 'No hay RedeployService configurado.');
+                return false;
+            }
+            // La compilación incremental y la sincronización ya terminaron
+            // antes de intentar DCEVM. El servicio solo coordina el ciclo de
+            // servidor y el deployment para evitar compilar dos veces.
+            const result = await this.redeployService.redeploy(project);
+            if (result.success) {
+                Logger.info('HOTRELOAD', result.message);
+            }
+            return result.success;
+        } catch (error) {
+            Logger.error('HOTRELOAD', `Redeploy falló: ${String(error)}`);
+            return false;
+        }
     }
 
     private static async compilarConAnalisisEstructural(javaFile: string, project: ProjectConfig): Promise<boolean> {
@@ -754,7 +918,7 @@ public class MM43CompilerServer {
         const ordenado = this.ordenarTopologicamente(afectadas, project);
 
         for (const file of ordenado) {
-            const success = await this.compilarConServidor(file, project);
+            const success = await this.compilarParaHotReload(file, project);
             if (!success) {
                 Logger.debug('DEBUG', `Fallo en ${file}, recompilacion completa...`);
                 return this.compilarModuloCompleto(javaFile, project);
@@ -829,41 +993,54 @@ public class MM43CompilerServer {
         });
     }
 
-    private static async compilarModuloCompleto(javaFile: string, project: ProjectConfig): Promise<boolean> {
-        Logger.info('HOTRELOAD', 'Compilacion completa del modulo...');
-
-        const { exec } = require('child_process');
-        const hasMaven = fs.existsSync(path.join(project.rootPath, 'pom.xml'));
-
-        return new Promise((resolve) => {
-            if (hasMaven) {
-                const cmd = `cd "${project.rootPath}" && mvnd compile -DskipTests`;
-                exec(cmd, { timeout: 180000 }, (error: any, stdout: string, stderr: string) => {
-                    if (error) {
-                        Logger.error('HOTRELOAD', `Maven failed: ${stderr || stdout}`);
-                        resolve(false);
-                    } else {
-                        Logger.info('HOTRELOAD', 'Maven compile OK');
-                        resolve(true);
-                    }
-                });
-            } else {
-                // Fallback javac
-                this.compilarConJavac(javaFile, project).then(resolve);
+        /**
+         * Compila la unidad modificada usando la capa Maven centralizada.
+         * Maven genera en target/classes; después se sincroniza el exploded WAR,
+         * que es el bytecode que consume HotSwap y el servidor.
+         */
+        private static async compilarParaHotReload(javaFile: string, project: ProjectConfig): Promise<boolean> {
+            const hasMaven = fs.existsSync(path.join(project.rootPath, 'pom.xml'));
+            if (!hasMaven) {
+                return this.compilarConJavac(javaFile, project);
             }
-        });
-    }
+
+            if (!this.mavenManager) {
+                Logger.error('HOTRELOAD', 'MavenManager no está configurado para el proyecto Maven.');
+                return false;
+            }
+
+            return this.mavenManager.buildExplodedIncremental(project);
+        }
+
+        private static async compilarModuloCompleto(javaFile: string, project: ProjectConfig): Promise<boolean> {
+            Logger.info('HOTRELOAD', 'Compilación completa del módulo mediante MavenManager...');
+            return this.compilarParaHotReload(javaFile, project);
+        }
 
     // ============================================================
     // HOTSWAP
     // ============================================================
 
-    private static async enviarHotswap(javaFile: string, project: ProjectConfig): Promise<void> {
-        const agentMode = ConfigManager.getAgentMode();
-        if (!agentMode || agentMode === 'none') {
-            Logger.debug('DEBUG', 'Hotswap omitido: agente no configurado');
+        private static async aplicarHotSwapConFallback(javaFile: string, project: ProjectConfig): Promise<boolean> {
+            const success = await this.enviarHotswap(javaFile, project, 'method-body');
+            if (success || ConfigManager.getReloadFailureFallback() === 'none') {
+                return success;
+            }
+            Logger.warn('HOTRELOAD', 'HotSwap falló; ejecutando redeploy según configuración.');
+            return this.ejecutarRedeploy(project);
+        }
+
+        private static async enviarHotswap(
+
+        javaFile: string,
+        project: ProjectConfig,
+        changeType: ReloadChangeType = 'method-body'
+    ): Promise<boolean> {
+        const strategy = createReloadStrategy();
+        if (strategy.name === 'Sin recarga') {
+            Logger.debug('DEBUG', 'Hotswap omitido: recarga deshabilitada');
             this.removerSpinner(javaFile);
-            return;
+            return true;
         }
 
         const javaRoot = path.join(project.rootPath, 'src', 'main', 'java');
@@ -879,26 +1056,42 @@ public class MM43CompilerServer {
         if (!fs.existsSync(classFile)) {
             Logger.debug('DEBUG', `.class no encontrado: ${classFile}`);
             const basename = path.basename(javaFile, '.java');
-            this.removerSpinner(javaFile, `Hotswap ❌ : ${basename}`, 3000);
-            return;
-        }        
+                        this.removerSpinner(javaFile, `Hotswap ❌ : ${basename}`, 3000);
+            return false;
+        }                
         const fileName = javaFile.substring(javaFile.lastIndexOf('\\') + 1);
 
-        let success = false;
+                let result;
         try {
-            success = await HotReloadClient.sendReload(className, classFile);
+            result = await strategy.reload(className, classFile, changeType);
         } catch (e) {
             Logger.error('HOTRELOAD', `Error enviando reload para ${fileName}: ${e}`);
+            result = { success: false, status: 'RELOAD_FAILED' as const, message: String(e), reloadType: changeType, requiresRedeploy: false };
         }
         
         const basename = path.basename(javaFile, '.java');
-        if (success) {
+        if (result.success) {
             Logger.info('HOTRELOAD', `clase recargada exitosamente: ${fileName}`);
             this.removerSpinner(javaFile, `Hotswap ⚡ : ${basename}`, 3000);
-        } else {
-            Logger.warn('HOTRELOAD', `HotSwap failed: ${fileName}`);
+                } else {
+                        Logger.warn('HOTRELOAD', `HotSwap failed (${result.status}): ${fileName}. ${result.message}`);
             this.removerSpinner(javaFile, `Hotswap ❌ : ${basename}`, 3000);
         }
+        return result.success;
+    }
+
+    private static async aplicarRecarga(
+        javaFile: string,
+        project: ProjectConfig,
+        changeType: ReloadChangeType
+    ): Promise<{ success: boolean; requiresRedeploy: boolean; message: string }> {
+        const strategy = createReloadStrategy();
+        const javaRoot = path.join(project.rootPath, 'src', 'main', 'java');
+        const relative = path.relative(javaRoot, javaFile);
+        const className = relative.replace(/\\/g, '/').replace(/\.java$/, '').replace(/\//g, '.');
+        const classFile = path.join(project.rootPath, 'target', project.warName, 'WEB-INF', 'classes', relative.replace(/\.java$/, '.class'));
+        const result = await strategy.reload(className, classFile, changeType);
+        return { success: result.success, requiresRedeploy: result.requiresRedeploy, message: result.message };
     }
 
     private static mostrarSpinner(javaFile: string): void {
@@ -930,13 +1123,13 @@ public class MM43CompilerServer {
         return new Promise(r => setTimeout(r, ms));
     }
 
-    private static execCommand(cmd: string, timeout: number = 30000): Promise<{ stdout: string; stderr: string }> {
-        return new Promise((resolve) => {
-            const { exec } = require('child_process');
-            exec(cmd, { timeout }, (error: any, stdout: string, stderr: string) => {
-                resolve({ stdout: stdout || '', stderr: stderr || '' });
-            });
-        });
+            private static async execProcess(
+        executable: string,
+        args: string[],
+        timeout: number = 30000
+    ): Promise<{ stdout: string; stderr: string }> {
+        const result = await ProcessRunner.run(executable, args, { timeout });
+        return { stdout: result.stdout, stderr: result.stderr };
     }
 
 
@@ -1000,18 +1193,18 @@ public class MM43CompilerServer {
                 '⚠️ La JVM del servidor NO es DCEVM. El Hot-Reload será limitado (solo cuerpos de métodos). ' +
                 '¿Qué desea hacer?',
                 { modal: true },
-                'Continuar con HotSwap Básico',
+                'Continuar con JVM estándar',
                 'Configurar DCEVM manualmente'
             );
 
-            if (choice === 'Continuar con HotSwap Básico') {
+            if (choice === 'Continuar con JVM estándar') {
                 Logger.debug('DEBUG', 'Usuario eligió HotSwap Básico');
                 await ConfigManager.setAgentPath(agentPath);
-                await ConfigManager.setAgentMode('basic');
+                await ConfigManager.setAgentMode('standard');
                 vscode.window.showInformationMessage(
-                    '⚡ Agente importado en modo básico. Cambios en firmas de métodos o campos requerirán Redeploy Completo.'
+                    'Agente importado en modo JVM estándar. Cambios estructurales requerirán Redeploy Completo.'
                 );
-                Logger.info('HOTRELOAD', '⚡ Modo básico activado — solo cambios en cuerpos de métodos.');
+                Logger.info('HOTRELOAD', 'Modo JVM estándar activado — solo cambios en cuerpos de métodos.');
             } else if (choice === 'Configurar DCEVM manualmente') {
                 Logger.debug('DEBUG', 'Usuario eligió Configurar DCEVM manualmente');
                 await this.openDcevmConfigFiles();

@@ -184,6 +184,7 @@ export class ServerProvider implements vscode.TreeDataProvider<vscode.TreeItem> 
             new ServerActionItem('Agregar Proyecto al Servidor', {
                 command: 'mm43.deployExploded', title: 'Agregar Proyecto'
             }, 'add'),
+                        this.buildReloadConfigurationItem(),
             new vscode.TreeItem('── Agente Hot-Reload ──', vscode.TreeItemCollapsibleState.None),
             ...this.buildAgentActions(),
             new vscode.TreeItem('─────────────────', vscode.TreeItemCollapsibleState.None),
@@ -206,11 +207,25 @@ export class ServerProvider implements vscode.TreeDataProvider<vscode.TreeItem> 
             return item;
         }
 
-        const modeLabel = agentMode === 'dcevm' ? 'DCEVM (Completo)' : 'Básico';
+        const modeLabel = agentMode === 'dcevm'
+            ? 'DCEVM — HotSwap estructural'
+            : 'JVM estándar — HotSwap limitado';
         const icon = agentMode === 'dcevm' ? '$(zap)' : '$(warning)';
         const item = new vscode.TreeItem(`${icon} Agente: ${modeLabel}`, vscode.TreeItemCollapsibleState.None);
         item.tooltip = `Ruta: ${agentPath}\nModo: ${modeLabel}`;
         item.contextValue = 'mm43AgentStatus';
+        return item;
+    }
+
+    private buildReloadConfigurationItem(): vscode.TreeItem {
+        const behavior = ConfigManager.getStructuralChangeBehavior();
+        const fallback = ConfigManager.getReloadFailureFallback();
+        const item = new vscode.TreeItem(
+            `Recarga: estructural=${behavior}, fallback=${fallback}`,
+            vscode.TreeItemCollapsibleState.None
+        );
+        item.tooltip = 'Configura mm43.structuralChangeBehavior y mm43.reloadFailureFallback en Settings.';
+        item.contextValue = 'mm43ReloadConfiguration';
         return item;
     }
 

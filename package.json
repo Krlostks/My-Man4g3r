@@ -2,9 +2,11 @@
   "name": "mm43",
   "publisher": "KrlosTKS",
   "displayName": "My M4nag3r",
-  "description": "E ",
-  "version": "0.2.6",
+  "description": "Conjunto de herramientas para la gestión y el desarrollo de proyectos maven.",
+  "version": "1.1.2",
+  "license": "MIT",
   "files": [
+    "LICENSE",
     "dist/**",
     "src/**/*.ts",
     "src/modules/IntellisenseSupport/parse-engines/data/**/*.json"
@@ -291,18 +293,46 @@
           "description": "Puerto TCP del agente de Hot-Reload Java.",
           "order": 5
         },
+        "mm43.mavenTool": {
+          "type": "string",
+          "default": "auto",
+          "description": "Herramienta Maven: auto, mvn, mvnd, wrapper o custom.",
+          "enum": ["auto", "mvn", "mvnd", "wrapper", "custom"],
+          "order": 5.1
+        },
+        "mm43.mavenPath": {
+          "type": "string",
+          "default": "",
+          "description": "Ruta al ejecutable Maven cuando mavenTool es custom.",
+          "order": 5.2
+        },
+        "mm43.structuralChangeBehavior": {
+          "type": "string",
+          "default": "auto-redeploy",
+          "description": "Qué hacer ante cambios estructurales: redeploy automático, confirmar o solo notificar.",
+          "enum": ["auto-redeploy", "confirm", "notify"],
+          "order": 6
+        },
+        "mm43.reloadFailureFallback": {
+          "type": "string",
+          "default": "auto-redeploy",
+          "description": "Acción si HotSwap falla: redeploy automático o no hacer nada.",
+          "enum": ["auto-redeploy", "none"],
+          "order": 6.1
+        },
         "mm43.agentPath": {
           "type": "string",
           "default": "",
           "description": "Ruta absoluta al archivo JAR del agente de Hot-Reload.",
-          "order": 6
+          "order": 6.2
         },
         "mm43.agentMode": {
           "type": "string",
           "default": "none",
-          "description": "Modo del agente: none (sin agente), basic (HotSwap básico), dcevm (recarga estructural completa).",
+          "description": "Modo de recarga: none (sin recarga), standard (JVM estándar), dcevm (recarga estructural).",
           "enum": [
             "none",
+            "standard",
             "basic",
             "dcevm"
           ],

@@ -8,6 +8,7 @@ import { Logger } from '../logger/Logger';
 
 export class AssetWatcher {
     private saveListener?: vscode.Disposable;
+    private paused = false;
 
     constructor(private isServerRunning?: () => boolean) {
         // Registrar el listener de guardado global desde el inicio
@@ -15,7 +16,8 @@ export class AssetWatcher {
     }
 
     setPaused(paused: boolean): void {
-        // No-op para mantener compatibilidad, el comportamiento real se rige por el estado del servidor
+        this.paused = paused;
+        Logger.debug('WATCHER', paused ? 'Watcher de assets pausado.' : 'Watcher de assets reanudado.');
     }
 
     private initSaveListener(): void {
@@ -24,8 +26,8 @@ export class AssetWatcher {
         }
 
         this.saveListener = vscode.workspace.onDidSaveTextDocument((document: vscode.TextDocument) => {
-            // SOLO funciona si el servidor está en ejecución (running)
-            if (this.isServerRunning && !this.isServerRunning()) {
+            // No aceptar eventos durante compilación/redeploy ni con el servidor detenido.
+            if (this.paused || (this.isServerRunning && !this.isServerRunning())) {
                 return;
             }
 

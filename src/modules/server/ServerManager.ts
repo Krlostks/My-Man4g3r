@@ -8,6 +8,8 @@ import { Logger } from '../logger/Logger';
 import { ServerValidator } from './ServerValidator';
 import { AgenteHotReloadManager } from '../hotreload/AgenteHotReloadManager';
 import { AssetWatcher } from './AssetWatcher';
+import { MavenToolResolver } from '../maven/MavenToolResolver';
+import { ProcessRunner } from '../process/ProcessRunner';
 
 export interface DeployedApp {
     name: string;
@@ -23,6 +25,7 @@ const POLL_INTERVAL_MS = 1_500;
 
 export class ServerManager {
     private serverTerminal: vscode.Terminal | undefined;
+    private terminalCloseListener?: vscode.Disposable;
     private onStateChange: StateChangeCallback;
     private assetWatcher: AssetWatcher | undefined;
     private currentState: ServerState = 'stopped';
@@ -48,7 +51,7 @@ export class ServerManager {
     // BLOQUE 1: Helpers privados
     // ─────────────────────────────────────────────
 
-    private setWatchersPaused(paused: boolean): void {
+        public setWatchersPaused(paused: boolean): void {
         this.assetWatcher?.setPaused(paused);
         AgenteHotReloadManager.setPaused(paused);
     }
@@ -92,6 +95,11 @@ export class ServerManager {
             }
             this.pollingTimers = [];
         }
+
+        public async waitUntilState(expectedState: ServerState, maxWaitMs = TIMEOUT_START_MS, label: string = expectedState): Promise<boolean> {
+        const state = await this.waitForState(expectedState, maxWaitMs, label);
+        return state === expectedState;
+    }
 
     private waitForState(
             expectedState: ServerState,
@@ -141,7 +149,8 @@ export class ServerManager {
     // BLOQUE 2: Ciclo de vida del servidor
     // ─────────────────────────────────────────────
 
-        start(): void {
+                start(options: { resumeWatchers?: boolean } = {}): void {
+        const resumeWatchers = options.resumeWatchers ?? true;
         const { serverPath, domain } = ConfigManager.getServerConfig();
         if (!serverPath || !domain) {
             vscode.window.showErrorMessage('[MM43] Servidor no configurado.');
@@ -166,7 +175,8 @@ export class ServerManager {
         term.sendText(`& "${this.asadmin}" start-domain --debug ${this.domain}`);
         this.serverTerminal = term;
 
-        vscode.window.onDidCloseTerminal(t => {
+                this.terminalCloseListener?.dispose();
+        this.terminalCloseListener = vscode.window.onDidCloseTerminal(t => {
             if (t === this.serverTerminal) {
                 this.clearPollingTimers();
                 this.onStateChange('stopped');
@@ -175,9 +185,11 @@ export class ServerManager {
         });
 
         // ── POLLING REAL en lugar de setTimeout fijo ──
-        this.waitForState('running', TIMEOUT_START_MS, 'iniciando').then((finalState) => {
+                this.waitForState('running', TIMEOUT_START_MS, 'iniciando').then((finalState) => {
             this.onStateChange(finalState);
-            this.setWatchersPaused(finalState !== 'running');
+            if (resumeWatchers) {
+                this.setWatchersPaused(finalState !== 'running');
+            }
             if (finalState === 'running') {
                 Logger.info('SERVER', '  Servidor iniciado correctamente.');
             } else {
@@ -262,6 +274,109 @@ export class ServerManager {
     }
 
     /**
+     * Ejecuta un redeploy verificable para hot reload.
+     * A diferencia de smartDeploy(), espera cada etapa y devuelve solo cuando
+     * el servidor y el deployment terminaron realmente.
+     */
+    async redeployAndWait(project: ProjectConfig, build: () => Promise<boolean>): Promise<boolean> {
+        this.setWatchersPaused(true);
+        try {
+            if (this.getServerState() !== 'stopped') {
+                this.stop();
+                if (!await this.waitUntilState('stopped', TIMEOUT_STOP_MS, 'deteniendo para redeploy')) {
+                    throw new Error('El servidor no llegó al estado detenido.');
+                }
+            }
+
+            if (!await build()) {
+                throw new Error('La compilación del proyecto falló.');
+            }
+
+                        this.start({ resumeWatchers: false });
+            if (!await this.waitUntilState('running', TIMEOUT_START_MS, 'iniciando tras redeploy')) {
+                throw new Error('El servidor no llegó al estado running.');
+            }
+
+            const targetExploded = path.join(project.rootPath, 'target', project.warName);
+            if (!fs.existsSync(targetExploded)) {
+                throw new Error(`Exploded no encontrado: ${targetExploded}`);
+            }
+
+                        const applicationQuery = await this.queryApplications();
+            if (!applicationQuery.success) {
+                throw new Error('No se pudo determinar si la aplicación ya está desplegada.');
+            }
+            const action = applicationQuery.apps.some(app => app.name === project.warName) ? 'redeploy' : 'deploy';
+            const result = await ProcessRunner.run(this.asadmin, [action, '--name', project.warName, targetExploded], {
+                timeout: 180_000,
+                onStdout: data => Logger.raw(data),
+                onStderr: data => Logger.raw(data),
+            });
+            if (result.code !== 0) {
+                throw new Error(result.stderr || result.stdout || `asadmin ${action} terminó con código ${result.code}`);
+            }
+
+            Logger.info('SERVER', `${action} completado para ${project.warName}.`);
+            return true;
+        } catch (error) {
+            Logger.error('SERVER', `Redeploy verificable falló: ${String(error)}`);
+            return false;
+                } finally {
+            // Solo se reanudan los watchers si el servidor quedó realmente disponible.
+            this.setWatchersPaused(this.getServerState() !== 'running');
+        }
+    }
+
+    /**
+     * Redeploy rápido para Hot Reload.
+     * Mantiene el servidor encendido y solo ejecuta deploy/redeploy sobre el
+     * exploded WAR ya compilado. Si falla, el servicio puede usar el flujo
+     * completo como fallback.
+     */
+    async fastRedeployAndWait(project: ProjectConfig): Promise<boolean> {
+        this.setWatchersPaused(true);
+        try {
+            if (this.getServerState() !== 'running') {
+                this.start({ resumeWatchers: false });
+                if (!await this.waitUntilState('running', TIMEOUT_START_MS, 'iniciando para redeploy rápido')) {
+                    throw new Error('El servidor no llegó al estado running.');
+                }
+            }
+
+            const targetExploded = path.join(project.rootPath, 'target', project.warName);
+            if (!fs.existsSync(targetExploded)) {
+                throw new Error(`Exploded no encontrado: ${targetExploded}`);
+            }
+
+            const applicationQuery = await this.queryApplications();
+            if (!applicationQuery.success) {
+                throw new Error('No se pudo determinar el estado de la aplicación.');
+            }
+
+            const action = applicationQuery.apps.some(app => app.name === project.warName)
+                ? 'redeploy'
+                : 'deploy';
+            const result = await ProcessRunner.run(this.asadmin, [action, '--name', project.warName, targetExploded], {
+                timeout: 180_000,
+                onStdout: data => Logger.raw(data),
+                onStderr: data => Logger.raw(data),
+            });
+
+            if (result.code !== 0) {
+                throw new Error(result.stderr || result.stdout || `asadmin ${action} terminó con código ${result.code}`);
+            }
+
+            Logger.info('SERVER', `${action} rápido completado para ${project.warName}.`);
+            return true;
+        } catch (error) {
+            Logger.error('SERVER', `Redeploy rápido falló: ${String(error)}`);
+            return false;
+        } finally {
+            this.setWatchersPaused(this.getServerState() !== 'running');
+        }
+    }
+
+    /**
      * Flujo RUN completo: buildExploded → smartDeploy.
      * Equivale al botón "Run" de IntelliJ/Eclipse con servidor GlassFish.
      * Llama externamente a MavenManager.buildExploded() antes de invocar esto,
@@ -291,8 +406,12 @@ export class ServerManager {
         term.sendText(`Remove-Item -Recurse -Force "${this.domainPath}\\osgi-cache\\*" -ErrorAction SilentlyContinue`);
         term.sendText(`Remove-Item -Recurse -Force "${this.domainPath}\\generated\\*" -ErrorAction SilentlyContinue`);
         // 3) Build exploded
-        term.sendText(`Set-Location "${project.rootPath}"`);
-        term.sendText(`mvnd compile war:exploded -DskipTests`);
+                term.sendText(`Set-Location "${project.rootPath}"`);
+        const maven = MavenToolResolver.resolve(project.rootPath);
+        const mavenCommand = [maven.command, ...maven.argsPrefix, 'compile', 'war:exploded', '-DskipTests']
+            .map(arg => `"${arg.replace(/"/g, '\\"')}"`)
+            .join(' ');
+        term.sendText(mavenCommand);
         // 4) Iniciar servidor
         term.sendText(`& "${this.asadmin}" start-domain --debug ${this.domain}`);
         // 5) Redeploy (la app ya existe si llegamos aquí desde fullRedeploy)
@@ -312,19 +431,39 @@ export class ServerManager {
     // BLOQUE 4: Consultas y gestión de aplicaciones
     // ─────────────────────────────────────────────
 
-    listApplications(): Promise<DeployedApp[]> {
+            async listApplications(): Promise<DeployedApp[]> {
+        const result = await this.queryApplications();
+
+        if (!result.success) {
+            throw new Error('No se pudieron consultar las aplicaciones desplegadas.');
+        }
+
+        return result.apps;
+    }
+
+    private queryApplications(): Promise<{ success: boolean; apps: DeployedApp[] }> {
         return new Promise((resolve) => {
             Logger.info('SERVER', 'Consultando aplicaciones desplegadas...');
-            exec(`"${this.asadmin}" list-applications`, { timeout: 15_000 }, (error, stdout) => {
+            const command = `"${this.asadmin}" list-applications`;
+
+            exec(command, { timeout: 15_000 }, (error, stdout, stderr) => {
+                Logger.debug('SERVER', `Comando ejecutado: ${command}`);
+                Logger.debug('SERVER', `stdout: ${stdout}`);
+                Logger.debug('SERVER', `stderr: ${stderr}`);
                 if (error) {
-                    Logger.error('SERVER', `list-applications error: ${error.message}`);
-                    resolve([]);
+                    Logger.error(
+                        'SERVER',
+                        `list-applications error: ${error.message}. stderr: ${stderr || '(vacío)'}`
+                    );
+                    resolve({ success: false, apps: [] });
                     return;
                 }
 
                 const apps: DeployedApp[] = [];
                 for (const line of stdout.split('\n').map(l => l.trim()).filter(Boolean)) {
-                    if (/^(Command|Nothing|No applications)/.test(line)) { continue; }
+                                        if (/^(Command|Nothing|No applications)/i.test(line)) {
+                        continue;
+                    }
                     const match = line.match(/^(\S+)\s*<(.+)>$/);
                     if (match) {
                         apps.push({ name: match[1], type: match[2].trim() });
@@ -334,7 +473,7 @@ export class ServerManager {
                 }
 
                 Logger.info('SERVER', `${apps.length} app(s) encontrada(s).`);
-                resolve(apps);
+                resolve({ success: true, apps });
             });
         });
     }
