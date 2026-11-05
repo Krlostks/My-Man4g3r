@@ -1,7 +1,7 @@
 ﻿import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
-import { ProjectConfig, SyncResult, ChangedClass } from '../../config/types';
+import { ProjectConfig, ServerState, SyncResult } from '../../config/types';
 import * as crypto from 'crypto';
 import { MavenComand } from './MavenComand';
 import { Logger } from '../logger/Logger';
@@ -22,27 +22,21 @@ export class MavenManager {
         Logger.debug('DEBUG', `buildExploded: ${project.name}`);
         const props: Record<string, string> = skipTests ? { 'skipTests': 'true' } : {};
         Logger.info('SERVER', 'Se consultará el estado del servidor');
-        const result = this.serverManager.getServerState();
-        if (result === 'stopped') {
+        const serverState = await this.getServerStateForBuild();
+        const canClean = serverState === 'stopped';
 
-            return this._runCmd(new MavenComand(
-                `${project.name}-build-exploded`,
-                `Build Exploded: ${project.name}`,
-                ['clean', 'compile', 'war:exploded'],
-                props,
-                [],
-                project.rootPath
-            ), `Build Exploded: ${project.name}`);
-        } else {
-            return this._runCmd(new MavenComand(
-                `${project.name}-build-exploded`,
-                `Build Exploded: ${project.name}`,
-                ['compile', 'war:exploded'],
-                props,
-                [],
-                project.rootPath
-            ), `Build Exploded: ${project.name}`);
+        if (!canClean) {
+            this.warnCleanSkipped(`Build Exploded: ${project.name}`, serverState);
         }
+
+        return this._runCmd(new MavenComand(
+            `${project.name}-build-exploded`,
+            `Build Exploded: ${project.name}`,
+            canClean ? ['clean', 'compile', 'war:exploded'] : ['compile', 'war:exploded'],
+            props,
+            [],
+            project.rootPath
+        ), `Build Exploded: ${project.name}`);
     }
 
     /**
@@ -50,18 +44,23 @@ export class MavenManager {
      * Uso: primera vez o al cambiar dependencias entre módulos.
      */
     async cleanInstall(project: ProjectConfig, skipTests = true): Promise<boolean> {
-        Logger.debug('DEBUG', `cleanInstall: ${project.name}`);
-        const props: Record<string, string> = skipTests ? { 'skipTests': 'true' } : {};
+            Logger.debug('DEBUG', `cleanInstall: ${project.name}`);
+            const serverState = await this.getServerStateForBuild();
+            if (serverState !== 'stopped') {
+                this.warnCleanBlocked(`Clean Install: ${project.name}`, serverState);
+                return false;
+            }
 
-        return this._runCmd(new MavenComand(
-            `${project.name}-clean-install`,
-            `Clean Install: ${project.name}`,
-            ['clean', 'install', 'war:exploded'],
-            props,
-            [],
-            project.rootPath
-        ), `Clean Install: ${project.name}`);
-    }
+            const props: Record<string, string> = skipTests ? { 'skipTests': 'true' } : {};
+            return this._runCmd(new MavenComand(
+                `${project.name}-clean-install`,
+                `Clean Install: ${project.name}`,
+                ['clean', 'install', 'war:exploded'],
+                props,
+                [],
+                project.rootPath
+            ), `Clean Install: ${project.name}`);
+        }
 
     /**
      * Compilación incremental para los flujos de hot reload.
@@ -85,17 +84,30 @@ export class MavenManager {
      * Compila y sincroniza las clases en el WAR exploded sin ejecutar
      * nuevamente el empaquetado completo.
      */
-    async buildExplodedIncremental(project: ProjectConfig, skipTests = true): Promise<boolean> {
-        const compiled = await this.compileIncremental(project, skipTests);
-        return compiled && this.syncExplodedClasses(project);
+        async buildExplodedIncremental(project: ProjectConfig, skipTests = true): Promise<boolean> {
+
+        const result = await this.buildExplodedIncrementalDetailed(project, skipTests);
+        return result.ok;
     }
 
-    /**
-     * Copia target/classes al directorio WEB-INF/classes del WAR exploded.
-     * También elimina clases obsoletas para evitar que el servidor cargue
-     * bytecode eliminado del proyecto.
+    async buildExplodedIncrementalDetailed(
+        project: ProjectConfig,
+        skipTests = true
+    ): Promise<{ ok: boolean; sync?: SyncResult }> {
+        const compiled = await this.compileIncremental(project, skipTests);
+        if (!compiled) {
+            return { ok: false };
+        }
+
+        const sync = await this.syncExplodedClasses(project);
+        return sync ? { ok: true, sync } : { ok: false };
+    }
+
+        /**
+     * Sincroniza target/classes con WEB-INF/classes de forma incremental.
+     * Retorna null si el origen no está disponible o si ocurre un error.
      */
-    async syncExplodedClasses(project: ProjectConfig): Promise<boolean> {
+    async syncExplodedClasses(project: ProjectConfig): Promise<SyncResult | null> {
         const source = path.join(project.rootPath, 'target', 'classes');
         const destination = path.join(
             project.rootPath, 'target', project.warName, 'WEB-INF', 'classes'
@@ -104,46 +116,135 @@ export class MavenManager {
         try {
             if (!fs.existsSync(source) || !fs.statSync(source).isDirectory()) {
                 Logger.error('MAVEN', `No existe el directorio de clases compiladas: ${source}`);
-                return false;
+                return null;
             }
 
-            this.syncDirectory(source, destination);
-            Logger.info('MAVEN', `Clases sincronizadas: ${source} -> ${destination}`);
-            return true;
+            const result = this.syncDirectory(source, destination);
+            Logger.info(
+                'MAVEN',
+                `Clases sincronizadas: ${result.changed.length} modificadas, ${result.removed.length} eliminadas`
+            );
+            return result;
         } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
             Logger.error('MAVEN', `No se pudieron sincronizar las clases: ${message}`);
-            return false;
+            return null;
         }
     }
 
-    private syncDirectory(source: string, destination: string): void {
+    private _syncTempCounter = 0;
+
+    private syncDirectory(source: string, destination: string): SyncResult {
+        const result: SyncResult = { changed: [], removed: [] };
+        this.syncDirectoryContents(source, destination, destination, result);
+        result.changed.sort((a, b) => a.className.localeCompare(b.className));
+        result.removed.sort((a, b) => a.localeCompare(b));
+        return result;
+    }
+
+    private syncDirectoryContents(
+        source: string,
+        destination: string,
+        destinationRoot: string,
+        result: SyncResult
+    ): void {
         if (fs.existsSync(destination) && !fs.lstatSync(destination).isDirectory()) {
+            this.collectRemovedClasses(destination, destinationRoot, result.removed);
             fs.rmSync(destination, { force: true });
         }
         fs.mkdirSync(destination, { recursive: true });
-        const sourceEntries = new Set(fs.readdirSync(source));
 
+        const sourceEntries = new Set(fs.readdirSync(source));
         for (const entry of sourceEntries) {
             const sourcePath = path.join(source, entry);
             const destinationPath = path.join(destination, entry);
             const sourceStat = fs.lstatSync(sourcePath);
 
             if (sourceStat.isDirectory()) {
-                this.syncDirectory(sourcePath, destinationPath);
+                this.syncDirectoryContents(sourcePath, destinationPath, destinationRoot, result);
             } else if (sourceStat.isFile()) {
                 if (fs.existsSync(destinationPath) && fs.lstatSync(destinationPath).isDirectory()) {
+                    this.collectRemovedClasses(destinationPath, destinationRoot, result.removed);
                     fs.rmSync(destinationPath, { recursive: true, force: true });
                 }
-                fs.copyFileSync(sourcePath, destinationPath);
+                this.syncFileIfChanged(sourcePath, destinationPath, destinationRoot, result);
             }
         }
 
         for (const entry of fs.readdirSync(destination)) {
             if (!sourceEntries.has(entry)) {
-                fs.rmSync(path.join(destination, entry), { recursive: true, force: true });
+                const stalePath = path.join(destination, entry);
+                this.collectRemovedClasses(stalePath, destinationRoot, result.removed);
+                fs.rmSync(stalePath, { recursive: true, force: true });
             }
         }
+    }
+
+    private syncFileIfChanged(
+        sourcePath: string,
+        destinationPath: string,
+        destinationRoot: string,
+        result: SyncResult
+    ): void {
+        const sourceBytes = fs.readFileSync(sourcePath);
+        let changed = !fs.existsSync(destinationPath);
+
+        if (!changed) {
+            const destinationStat = fs.statSync(destinationPath);
+            changed = destinationStat.size !== sourceBytes.length;
+            if (!changed) {
+                const destinationBytes = fs.readFileSync(destinationPath);
+                changed = this.sha256(sourceBytes) !== this.sha256(destinationBytes);
+            }
+        }
+
+        if (!changed) {
+            return;
+        }
+
+        fs.mkdirSync(path.dirname(destinationPath), { recursive: true });
+        const tempPath = `${destinationPath}.mm43tmp-${process.pid}-${Date.now()}-${++this._syncTempCounter}`;
+
+        try {
+            fs.writeFileSync(tempPath, sourceBytes);
+            fs.renameSync(tempPath, destinationPath);
+        } catch (error) {
+            try {
+                if (fs.existsSync(tempPath)) {
+                    fs.rmSync(tempPath, { force: true });
+                }
+            } catch { /* conservar el error original */ }
+            throw error;
+        }
+
+        if (destinationPath.toLowerCase().endsWith('.class')) {
+            const relativePath = path.relative(destinationRoot, destinationPath);
+            const normalizedPath = relativePath.split(path.sep).join('/');
+            result.changed.push({
+                className: normalizedPath.replace(/\.class$/i, '').replace(/\//g, '.'),
+                classFile: destinationPath,
+                hash: this.sha256(sourceBytes),
+            });
+        }
+    }
+
+    private collectRemovedClasses(targetPath: string, destinationRoot: string, removed: string[]): void {
+        if (!fs.existsSync(targetPath)) {
+            return;
+        }
+
+        const stat = fs.lstatSync(targetPath);
+        if (stat.isDirectory()) {
+            for (const entry of fs.readdirSync(targetPath)) {
+                this.collectRemovedClasses(path.join(targetPath, entry), destinationRoot, removed);
+            }
+        } else if (stat.isFile() && targetPath.toLowerCase().endsWith('.class')) {
+            removed.push(path.relative(destinationRoot, targetPath).split(path.sep).join('/'));
+        }
+    }
+
+    private sha256(contents: Buffer): string {
+        return crypto.createHash('sha256').update(contents).digest('hex');
     }
 
     /**
@@ -151,35 +252,46 @@ export class MavenManager {
      * Uso: verificación rápida de errores de compilación.
      */
     async cleanCompile(project: ProjectConfig): Promise<boolean> {
-        Logger.debug('DEBUG', `cleanCompile: ${project.name}`);
+            Logger.debug('DEBUG', `cleanCompile: ${project.name}`);
+            const serverState = await this.getServerStateForBuild();
+            const canClean = serverState === 'stopped';
 
-        return this._runCmd(new MavenComand(
-            `${project.name}-clean-compile`,
-            `Clean Compile: ${project.name}`,
-            ['clean', 'compile'],
-            { 'skipTests': 'true' },
-            [],
-            project.rootPath
-        ), `Clean Compile: ${project.name}`);
-    }
+            if (!canClean) {
+                this.warnCleanSkipped(`Clean Compile: ${project.name}`, serverState);
+            }
+
+            return this._runCmd(new MavenComand(
+                `${project.name}-clean-compile`,
+                `Clean Compile: ${project.name}`,
+                canClean ? ['clean', 'compile'] : ['compile'],
+                { 'skipTests': 'true' },
+                [],
+                project.rootPath
+            ), `Clean Compile: ${project.name}`);
+        }
 
     /**
      * clean + package → WAR empaquetado en target/.
      * Uso: exportación / despliegue en producción.
      */
     async cleanPackage(project: ProjectConfig, skipTests = true): Promise<boolean> {
-        Logger.debug('DEBUG', `cleanPackage: ${project.name}`);
-        const props: Record<string, string> = skipTests ? { 'skipTests': 'true' } : {};
+            Logger.debug('DEBUG', `cleanPackage: ${project.name}`);
+            const serverState = await this.getServerStateForBuild();
+            if (serverState !== 'stopped') {
+                this.warnCleanBlocked(`Package WAR: ${project.name}`, serverState);
+                return false;
+            }
 
-        return this._runCmd(new MavenComand(
-            `${project.name}-clean-package`,
-            `Package WAR: ${project.name}`,
-            ['clean', 'package'],
-            props,
-            [],
-            project.rootPath
-        ), `Package WAR: ${project.name}`);
-    }
+            const props: Record<string, string> = skipTests ? { 'skipTests': 'true' } : {};
+            return this._runCmd(new MavenComand(
+                `${project.name}-clean-package`,
+                `Package WAR: ${project.name}`,
+                ['clean', 'package'],
+                props,
+                [],
+                project.rootPath
+            ), `Package WAR: ${project.name}`);
+        }
 
     // ─────────────────────────────────────────────
     // BLOQUE 2: Gestión de dependencias
@@ -254,6 +366,28 @@ export class MavenManager {
     // BLOQUE 3: Helper interno
     // ─────────────────────────────────────────────
 
+    private async getServerStateForBuild(): Promise<ServerState> {
+        try {
+            return await this.serverManager.checkServerStatus();
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            Logger.warn('MAVEN', `No se pudo verificar el estado del servidor; se prohíbe clean por seguridad: ${message}`);
+            return 'unknown';
+        }
+    }
+
+    private warnCleanSkipped(operation: string, state: ServerState): void {
+        const message = `${operation}: servidor ${state}; se omite clean.`;
+        Logger.warn('MAVEN', message);
+        void vscode.window.showWarningMessage(`[MM43] ${message}`);
+    }
+
+    private warnCleanBlocked(operation: string, state: ServerState): void {
+        const message = `${operation} cancelado: clean solo se permite con el servidor detenido (estado: ${state}). Detén el servidor y vuelve a intentarlo.`;
+        Logger.warn('MAVEN', message);
+        void vscode.window.showWarningMessage(`[MM43] ${message}`);
+    }
+
     private async _runCmd(cmd: MavenComand, label: string): Promise<boolean> {
         const valid = await cmd.validate();
         if (!valid) {
@@ -278,3 +412,4 @@ export class MavenManager {
         return result.success;
     }
 }
+

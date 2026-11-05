@@ -174,7 +174,7 @@ export interface ChangedClass {
     className: string;
     /** Ruta absoluta del .class en WEB-INF/classes. */
     classFile: string;
-    /** Hash SHA-256 (16 hex chars) del bytecode sincronizado. */
+    /** Hash SHA-256 (64 caracteres hexadecimales) del bytecode sincronizado. */
     hash: string;
 }
 

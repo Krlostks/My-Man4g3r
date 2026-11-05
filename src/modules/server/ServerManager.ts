@@ -509,14 +509,14 @@ export class ServerManager {
             const targetDomain = this.domain;
             exec(`"${this.asadmin}" list-domains`, { timeout: 10_000 }, (error, stdout) => {
                 if (error) {
-                    Logger.error('SERVER', `Error al consultar dominios: ${error.message}`);
-                    this.onStateChange('stopped');
-                    resolve('stopped');
-                    return;
-                }
+                                    Logger.error('SERVER', `Error al consultar dominios: ${error.message}`);
+                                                        this.onStateChange('unknown');
+                                                        resolve('unknown');
+                                                        return;
+                                                    }
 
-                const lines = stdout.split('\n');
-                let foundState: ServerState = 'stopped';
+                                                    const lines = stdout.split('\n');
+                                                    let foundState: ServerState = 'unknown';
                 for (const line of lines) {
                     const cleanLine = line.trim();
                     if (cleanLine.startsWith(targetDomain)) {
