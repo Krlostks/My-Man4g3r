@@ -1,4 +1,4 @@
-import * as vscode from 'vscode';
+﻿import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 import { AgentMode, ProjectConfig, ServerConfig, ReloadFailureFallback, StructuralChangeBehavior } from './types';
@@ -189,6 +189,59 @@ export class ConfigManager {
         await config.update('agentMode', undefined, vscode.ConfigurationTarget.Workspace);
     }
 
+
+    // ─── Settings nuevos HotswapAgent ─────────────────────────────────────────
+
+    static getHotswapAgentJar(): string {
+        // Leer nuevo setting; hacer fallback al setting legado agentPath una sola vez
+        const newVal = vscode.workspace.getConfiguration(SECTION).get<string>('hotswap.agentJar', '');
+        if (newVal) { return newVal; }
+        // Migración one-shot desde agentPath legado
+        return vscode.workspace.getConfiguration(SECTION).get<string>('agentPath', '');
+    }
+
+    static async setHotswapAgentJar(jarPath: string): Promise<void> {
+        const config = vscode.workspace.getConfiguration(SECTION);
+        await config.update('hotswap.agentJar', jarPath, vscode.ConfigurationTarget.Workspace);
+    }
+
+    static getHotswapMode(): 'auto' | 'agent' | 'jdwp' | 'none' {
+        const val = vscode.workspace.getConfiguration(SECTION).get<string>('hotswap.mode', 'auto');
+        return (val === 'agent' || val === 'jdwp' || val === 'none') ? val as any : 'auto';
+    }
+
+    static getHotswapDcevmDriver(): 'agent' | 'jdwp' {
+        const val = vscode.workspace.getConfiguration(SECTION).get<string>('hotswap.dcevmDriver', 'agent');
+        return val === 'jdwp' ? 'jdwp' : 'agent';
+    }
+
+    static getHotswapSettleMs(): number {
+        return vscode.workspace.getConfiguration(SECTION).get<number>('hotswap.settleMs', 1500);
+    }
+
+    static getHotswapReloadTimeoutMs(): number {
+        return vscode.workspace.getConfiguration(SECTION).get<number>('hotswap.reloadTimeoutMs', 15000);
+    }
+
+    /**
+     * Obtiene la ruta al archivo .properties de HotswapAgent en el workspace.
+     * Ruta: <workspace>/.mm43/hotswap-agent.properties
+     */
+    static getHotswapPropertiesPath(): string | undefined {
+        const ws = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        if (!ws) { return undefined; }
+        return require('path').join(ws, '.mm43', 'hotswap-agent.properties').replace(/\\/g, '/');
+    }
+
+    /**
+     * Obtiene la ruta al log de HotswapAgent en el workspace.
+     * Ruta: <workspace>/.mm43/hotswap-agent.log
+     */
+    static getHotswapLogPath(): string | undefined {
+        const ws = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        if (!ws) { return undefined; }
+        return require('path').join(ws, '.mm43', 'hotswap-agent.log').replace(/\\/g, '/');
+    }
     static onDidChange(callback: () => void): vscode.Disposable {
         return vscode.workspace.onDidChangeConfiguration(e => {
             if (e.affectsConfiguration(SECTION)) {

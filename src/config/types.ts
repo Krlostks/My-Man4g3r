@@ -1,4 +1,4 @@
-import * as vscode from 'vscode';
+﻿import * as vscode from 'vscode';
 
 export interface javaAcompilar {
     ruta: string;
@@ -166,6 +166,63 @@ export type AgentMode = 'none' | 'standard' | 'basic' | 'dcevm';
 export type StructuralChangeBehavior = 'auto-redeploy' | 'confirm' | 'notify';
 export type ReloadFailureFallback = 'auto-redeploy' | 'none';
 
+// ─── Tipos nuevos para HotswapAgent ──────────────────────────────────────────
+
+/** Clase modificada detectada en la sincronizacion incremental. */
+export interface ChangedClass {
+    /** Nombre canonico (ej. 'a.b.Foo$1'). */
+    className: string;
+    /** Ruta absoluta del .class en WEB-INF/classes. */
+    classFile: string;
+    /** Hash SHA-256 (16 hex chars) del bytecode sincronizado. */
+    hash: string;
+}
+
+/** Resultado de la sincronizacion incremental de WEB-INF/classes. */
+export interface SyncResult {
+    /** Clases cuyo bytecode fue copiado (nuevo o modificado). */
+    changed: ChangedClass[];
+    /** Rutas relativas a classRoot de los .class eliminados. */
+    removed: string[];
+}
+
+/** Capacidad de la JVM que usa el servidor. */
+export type JvmKind = 'dcevm' | 'dcevm-alt' | 'standard' | 'unknown';
+
+/** Modo de recarga activo (derivado de JvmKind + config). */
+export type ReloadMode = 'hotswap-agent' | 'jdwp' | 'none';
+
+/** Estado del resultado de recarga por clase. */
+export type ReloadStatus =
+    | 'reloaded'
+    | 'skipped-not-loaded'
+    | 'failed'
+    | 'stale-loader'
+    | 'timeout';
+
+/** Resultado de recarga de una clase individual. */
+export interface ReloadOutcome {
+    className: string;
+    status: ReloadStatus;
+    ms: number;
+    message?: string;
+}
+
+/** Contexto que recibe una estrategia de recarga. */
+export interface ReloadContext {
+    project: ProjectConfig;
+    classes: ChangedClass[];
+    changeType: 'method-body' | 'structural';
+}
+
+/** Resultado agregado de un ciclo de recarga. */
+export interface HotswapReloadResult {
+    success: boolean;
+    outcomes: ReloadOutcome[];
+    requiresRedeploy: boolean;
+    requiresServerRestart: boolean;
+    message: string;
+}
 
 export interface AgentConfig {
     agentPath: string;

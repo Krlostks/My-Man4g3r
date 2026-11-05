@@ -1,7 +1,8 @@
-import * as vscode from 'vscode';
+﻿import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
-import { ProjectConfig } from '../../config/types';
+import { ProjectConfig, SyncResult, ChangedClass } from '../../config/types';
+import * as crypto from 'crypto';
 import { MavenComand } from './MavenComand';
 import { Logger } from '../logger/Logger';
 import { ServerManager } from '../server/ServerManager';

@@ -1,0 +1,180 @@
+[
+  {
+    "key": "autoHotswap",
+    "type": "bool",
+    "default": "true",
+    "doc": "Activa el HotswapperPlugin que observa WEB-INF/classes y recarga clases al detectar cambios.",
+    "scope": "arg",
+    "apply": "restart",
+    "group": "Agente"
+  },
+  {
+    "key": "disablePlugin",
+    "type": "list",
+    "default": "",
+    "doc": "Plugin(es) a deshabilitar (arg repetible). Ej: disablePlugin=Spring,Hibernate",
+    "scope": "arg",
+    "apply": "restart",
+    "group": "Plugins"
+  },
+  {
+    "key": "propertiesFilePath",
+    "type": "path",
+    "default": "",
+    "doc": "Ruta al archivo .properties externo leído por cada classloader. Solo lectura desde la UI.",
+    "scope": "arg",
+    "apply": "restart",
+    "group": "Agente",
+    "readOnly": true
+  },
+  {
+    "key": "LOGGER",
+    "type": "enum",
+    "default": "info",
+    "values": ["error", "reload", "warning", "info", "debug", "trace"],
+    "doc": "Nivel de log raíz del agente.",
+    "scope": "arg",
+    "apply": "restart",
+    "group": "Logs"
+  },
+  {
+    "key": "LOGFILE",
+    "type": "path",
+    "default": "",
+    "doc": "Ruta al archivo de log del agente. Se reabre en cada classloader.",
+    "scope": "file",
+    "apply": "redeploy",
+    "group": "Logs"
+  },
+  {
+    "key": "LOGFILE.append",
+    "type": "bool",
+    "default": "true",
+    "doc": "Si es true, el log se acumula; si false, se trunca en cada reapertura.",
+    "scope": "file",
+    "apply": "redeploy",
+    "group": "Logs"
+  },
+  {
+    "key": "LOG_TO_CONSOLE",
+    "type": "bool",
+    "default": "false",
+    "doc": "Redirige los mensajes del agente a la consola del servidor.",
+    "scope": "file",
+    "apply": "redeploy",
+    "group": "Logs"
+  },
+  {
+    "key": "LOGGER.org.hotswap.agent.config.PluginManager",
+    "type": "enum",
+    "default": "debug",
+    "values": ["error", "reload", "warning", "info", "debug", "trace"],
+    "doc": "Nivel de log del PluginManager. En 'debug' se ven los resultados de recarga por clase.",
+    "scope": "file",
+    "apply": "redeploy",
+    "group": "Logs"
+  },
+  {
+    "key": "LOGGER.org.hotswap.agent.plugin.hotswapper",
+    "type": "enum",
+    "default": "trace",
+    "values": ["error", "reload", "warning", "info", "debug", "trace"],
+    "doc": "Nivel de log del HotswapperPlugin. En 'trace' se ven clases no cargadas todavía.",
+    "scope": "file",
+    "apply": "redeploy",
+    "group": "Logs"
+  },
+  {
+    "key": "disabledPlugins",
+    "type": "list",
+    "default": "",
+    "doc": "Lista de plugins deshabilitados, separados por coma. Ej: Spring,Hibernate",
+    "scope": "file",
+    "apply": "redeploy",
+    "group": "Plugins"
+  },
+  {
+    "key": "extraClasspath",
+    "type": "path",
+    "default": "",
+    "doc": "Classpath adicional para todos los classloaders (separado por ;). No usar para rutas con espacios.",
+    "scope": "file",
+    "apply": "redeploy",
+    "group": "Avanzado"
+  },
+  {
+    "key": "watchResources",
+    "type": "path",
+    "default": "",
+    "doc": "Directorios adicionales a vigilar para recursos web (separados por ;).",
+    "scope": "file",
+    "apply": "redeploy",
+    "group": "Avanzado"
+  },
+  {
+    "key": "webappDir",
+    "type": "path",
+    "default": "",
+    "doc": "Directorio de recursos web de la aplicación. No soportado en GlassFish/Payara (cubierto por AssetWatcher).",
+    "scope": "file",
+    "apply": "redeploy",
+    "group": "Avanzado",
+    "note": "No soportado en GlassFish/Payara"
+  },
+  {
+    "key": "autoHotswap.port",
+    "type": "int",
+    "default": "",
+    "doc": "Puerto JPDA para hotswap via JDWP (requiere tools.jar). No recomendado con JDK 8 + Payara.",
+    "scope": "file",
+    "apply": "redeploy",
+    "group": "Avanzado",
+    "note": "No usar con Payara/GlassFish"
+  },
+  {
+    "key": "excludedClassLoaderPatterns",
+    "type": "list",
+    "default": "",
+    "doc": "Patrones de classloaders a excluir del hotswap (mutuamente excluyente con includedClassLoaderPatterns).",
+    "scope": "file",
+    "apply": "redeploy",
+    "group": "Avanzado"
+  },
+  {
+    "key": "includedClassLoaderPatterns",
+    "type": "list",
+    "default": "",
+    "doc": "Patrones de classloaders a incluir (mutuamente excluyente con excludedClassLoaderPatterns).",
+    "scope": "file",
+    "apply": "redeploy",
+    "group": "Avanzado"
+  },
+  {
+    "key": "LOGGER_DATETIME_FORMAT",
+    "type": "string",
+    "default": "HH:mm:ss.SSS",
+    "doc": "Formato de timestamp en el log del agente.",
+    "scope": "file",
+    "apply": "redeploy",
+    "group": "Logs"
+  },
+  {
+    "key": "weld.beanReloadStrategy",
+    "type": "string",
+    "default": "",
+    "doc": "Estrategia de recarga de beans Weld CDI.",
+    "scope": "file",
+    "apply": "redeploy",
+    "group": "Plugins"
+  },
+  {
+    "key": "spring.basePackagePrefix",
+    "type": "string",
+    "default": "",
+    "doc": "Prefijo de paquete base de Spring para limitar el scope del plugin.",
+    "scope": "file",
+    "apply": "redeploy",
+    "group": "Plugins"
+  }
+]
+

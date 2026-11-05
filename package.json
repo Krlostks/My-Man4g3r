@@ -1,4 +1,4 @@
-{
+﻿{
   "name": "mm43",
   "publisher": "KrlosTKS",
   "displayName": "My M4nag3r",
@@ -320,23 +320,52 @@
           "enum": ["auto-redeploy", "none"],
           "order": 6.1
         },
-        "mm43.agentPath": {
-          "type": "string",
-          "default": "",
-          "description": "Ruta absoluta al archivo JAR del agente de Hot-Reload.",
-          "order": 6.2
-        },
         "mm43.agentMode": {
           "type": "string",
           "default": "none",
-          "description": "Modo de recarga: none (sin recarga), standard (JVM estándar), dcevm (recarga estructural).",
-          "enum": [
-            "none",
-            "standard",
-            "basic",
-            "dcevm"
-          ],
+          "description": "(Deprecado) Usar mm43.hotswap.mode. Modo legado: none, standard, basic, dcevm.",
+          "enum": ["none", "standard", "basic", "dcevm"],
+          "markdownDeprecationMessage": "Use `mm43.hotswap.mode` en su lugar.",
           "order": 7
+        },
+        "mm43.agentPath": {
+          "type": "string",
+          "default": "",
+          "description": "(Deprecado) Usar mm43.hotswap.agentJar. Ruta al JAR del agente.",
+          "markdownDeprecationMessage": "Use `mm43.hotswap.agentJar` en su lugar.",
+          "order": 6.2
+        },
+        "mm43.hotswap.agentJar": {
+          "type": "string",
+          "default": "",
+          "description": "Ruta absoluta al JAR de HotswapAgent (ej. C:/Java/hotswap-agent-2.0.3.jar).",
+          "order": 7.1
+        },
+        "mm43.hotswap.mode": {
+          "type": "string",
+          "default": "auto",
+          "description": "Modo de recarga: auto (elige segun JVM), agent (HotswapAgent), jdwp (JDWP), none.",
+          "enum": ["auto", "agent", "jdwp", "none"],
+          "order": 7.2
+        },
+        "mm43.hotswap.dcevmDriver": {
+          "type": "string",
+          "default": "agent",
+          "description": "Driver de recarga cuando la JVM es DCEVM: agent (HotswapAgent) o jdwp.",
+          "enum": ["agent", "jdwp"],
+          "order": 7.3
+        },
+        "mm43.hotswap.settleMs": {
+          "type": "number",
+          "default": 1500,
+          "description": "Milisegundos de silencio en el log del agente antes de considerar el resultado estable.",
+          "order": 7.4
+        },
+        "mm43.hotswap.reloadTimeoutMs": {
+          "type": "number",
+          "default": 15000,
+          "description": "Tiempo maximo (ms) esperando resultado del agente antes de reportar timeout.",
+          "order": 7.5
         },
         "mm43.projects": {
           "type": "array",
